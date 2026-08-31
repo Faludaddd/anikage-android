@@ -13,6 +13,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.anikage.app.Config
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.AnimeDetails
+import com.anikage.app.core.log.AppLogger
+import com.anikage.app.core.log.LogCategory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,9 +56,14 @@ class WatchViewModel(
 
     private fun loadAnime() {
         viewModelScope.launch {
+            AppLogger.d(LogCategory.PLAYER, "Loading anime details (id=$animeId)")
             val result = repo.animeDetails(animeId)
             result.fold(
                 onSuccess = { details ->
+                    AppLogger.i(
+                        LogCategory.PLAYER,
+                        "Loaded '${details.displayTitle()}' (${details.episodes ?: '?'} eps)",
+                    )
                     val total = details.episodes ?: (details.nextAiringEpisode?.episode?.minus(1)) ?: 1
                     val ep = _state.value.episode.coerceIn(1, total.coerceAtLeast(1))
                     _state.value = _state.value.copy(
@@ -69,6 +76,7 @@ class WatchViewModel(
                     loadStream(ep)
                 },
                 onFailure = { e ->
+                    AppLogger.e(LogCategory.PLAYER, "Failed to load anime (id=$animeId)", e)
                     _state.value = _state.value.copy(
                         loading = false,
                         error = e.message ?: "Failed to load anime.",
@@ -80,6 +88,7 @@ class WatchViewModel(
 
     private fun loadStream(episode: Int) {
         viewModelScope.launch {
+            AppLogger.d(LogCategory.PLAYER, "Loading stream for episode $episode")
             val streamUrl = resolveStreamUrl(animeId, episode)
             // Load saved position if any
             val saved = if (Config.Player.RESUME_FROM_POSITION)
@@ -100,7 +109,10 @@ class WatchViewModel(
                 )
                 .build()
             player.setMediaItem(media)
-            if (saved > 0L) player.seekTo(saved)
+            if (saved > 0L) {
+                player.seekTo(saved)
+                AppLogger.d(LogCategory.PLAYER, "Resuming from saved position ${saved / 1000}s")
+            }
             player.prepare()
             if (Config.Player.AUTO_PLAY) player.play()
             // Mark as recently viewed
@@ -140,19 +152,34 @@ class WatchViewModel(
      * out-of-the-box.
      */
     private suspend fun resolveStreamUrl(animeId: Int, episode: Int): String {
-        val source = Config.STREAM_SOURCE_URL ?: return Config.SAMPLE_STREAM_URL
+        val source = Config.STREAM_SOURCE_URL ?: run {
+            AppLogger.w(
+                LogCategory.PLAYER,
+                "STREAM_SOURCE_URL not set — using the sample stream (see Config.kt)",
+            )
+            return Config.SAMPLE_STREAM_URL
+        }
         return try {
             val client = okhttp3.OkHttpClient()
             val req = okhttp3.Request.Builder()
                 .url("$source?id=$animeId&episode=$episode")
                 .build()
             client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return Config.SAMPLE_STREAM_URL
+                if (!resp.isSuccessful) {
+                    AppLogger.w(
+                        LogCategory.PLAYER,
+                        "Stream source HTTP ${resp.code} — falling back to the sample stream",
+                    )
+                    return Config.SAMPLE_STREAM_URL
+                }
                 val body = resp.body?.string() ?: return Config.SAMPLE_STREAM_URL
                 val parsed = kotlinx.serialization.json.Json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
-                parsed["streamUrl"]?.toString()?.trim('"') ?: Config.SAMPLE_STREAM_URL
+                parsed["streamUrl"]?.toString()?.trim('"')?.also {
+                    AppLogger.i(LogCategory.PLAYER, "Resolved stream URL for episode $episode")
+                } ?: Config.SAMPLE_STREAM_URL
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLogger.e(LogCategory.PLAYER, "Stream source request failed", e)
             Config.SAMPLE_STREAM_URL
         }
     }

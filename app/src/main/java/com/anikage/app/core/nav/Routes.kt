@@ -24,6 +24,7 @@ object Routes {
     const val MUSIC = "music"
     const val TORRENTS = "torrents"
     const val SETTINGS = "settings"
+    const val LOGGER = "logger"
     const val ABOUT = "about"
 
     const val DETAILS = "details/{id}"

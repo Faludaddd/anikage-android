@@ -1,11 +1,24 @@
 package com.anikage.app
 
 import android.app.Application
+import com.anikage.app.core.log.AppLogger
+import com.anikage.app.core.log.LogCategory
 
 /**
- * Application class. Mostly a no-op for now; provides an extension hook if
- * you later add analytics, a foreground service, etc.
+ * Application class. Initialises the in-app logger (and its crash
+ * capture) first thing so every subsystem can log through it.
  *
  * All customization comes from [Config].
  */
-class AnikageApp : Application()
+class AnikageApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        AppLogger.init(this)
+        AppLogger.i(
+            LogCategory.APP,
+            "Anikage starting — v${Config.APP_VERSION} (code ${Config.APP_VERSION_CODE}), " +
+                "device ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, " +
+                "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})",
+        )
+    }
+}

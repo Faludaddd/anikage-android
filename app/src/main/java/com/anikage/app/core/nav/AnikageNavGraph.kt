@@ -30,6 +30,7 @@ import com.anikage.app.ui.music.MusicScreen
 import com.anikage.app.ui.player.WatchScreen
 import com.anikage.app.ui.schedule.ScheduleScreen
 import com.anikage.app.ui.search.SearchScreen
+import com.anikage.app.ui.settings.LoggerScreen
 import com.anikage.app.ui.settings.SettingsScreen
 import com.anikage.app.ui.torrents.TorrentsScreen
 
@@ -87,6 +88,12 @@ fun AnikageApp() {
                 }
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
+                        onBackClick = { navController.popBackStack() },
+                        onOpenLogger = { navController.navigate(Routes.LOGGER) },
+                    )
+                }
+                composable(Routes.LOGGER) {
+                    LoggerScreen(
                         onBackClick = { navController.popBackStack() },
                     )
                 }

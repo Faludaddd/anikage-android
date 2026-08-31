@@ -17,6 +17,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import com.anikage.app.Config
+import com.anikage.app.core.log.AppLogger
+import com.anikage.app.core.log.LogCategory
 
 /**
  * Low-level AniList GraphQL client.
@@ -39,6 +41,27 @@ class AniListApi(
 
     /** Generic GraphQL request. Returns the raw response JSON. */
     private fun execute(query: String, variables: JsonObject): String {
+        val op = operationName(query)
+        val started = System.currentTimeMillis()
+        AppLogger.d(LogCategory.NETWORK, "AniList -> $op")
+        try {
+            val raw = executeInternal(query, variables)
+            AppLogger.d(
+                LogCategory.NETWORK,
+                "AniList <- $op (${System.currentTimeMillis() - started}ms, ${raw.length} bytes)",
+            )
+            return raw
+        } catch (e: Exception) {
+            AppLogger.e(
+                LogCategory.NETWORK,
+                "AniList FAILED $op (${System.currentTimeMillis() - started}ms)",
+                e,
+            )
+            throw e
+        }
+    }
+
+    private fun executeInternal(query: String, variables: JsonObject): String {
         // Build the request body as a JSON object: {"query": "...", "variables": { ... }}
         val body = buildJsonObject {
             put("query", query)
@@ -69,6 +92,10 @@ class AniListApi(
             return raw
         }
     }
+
+    /** Best-effort GraphQL operation name for log messages. */
+    private fun operationName(query: String): String =
+        Regex("(?:query|mutation)\\s+(\\w+)").find(query)?.groupValues?.get(1) ?: "request"
 
     /** Paged list of trending anime. */
     suspend fun trending(page: Int = 1, perPage: Int = 20): Pair<List<Anime>, PageInfo> {
