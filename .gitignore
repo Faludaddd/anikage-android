@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+.gradle/
+.gradle-home/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+
+# APK outputs (downloadable separately from /download/)
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Logs / OS
+*.log
+.DS_Store

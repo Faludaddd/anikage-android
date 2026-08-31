@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Splash theme — applied before Compose UI inflates.
+         Uses core-splashscreen to draw a dark background briefly. -->
+    <style name="Theme.Anikage.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/anikage_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/anikage_background</item>
+        <item name="postSplashScreenTheme">@android:style/Theme.Material.NoActionBar</item>
+    </style>
+
+</resources>
