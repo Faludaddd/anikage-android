@@ -6,9 +6,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.ViewModelProvider.Factory
 import com.anikage.app.core.data.AnikageRepository
-import com.anikage.app.core.data.currentSeason
-import com.anikage.app.core.data.currentYear
 import com.anikage.app.core.data.model.Anime
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +22,15 @@ data class HomeUiState(
     val error: String? = null,
 )
 
+/**
+ * Home screen data.
+ *
+ * All four section fetches launch CONCURRENTLY (the previous version awaited
+ * them one-by-one, adding each request's latency to the total). The
+ * repository's single-flight layer guarantees each section is fetched exactly
+ * once no matter how many widgets consume it, so duplicated network calls at
+ * startup are impossible by construction.
+ */
 class HomeViewModel(
     private val repo: AnikageRepository,
 ) : ViewModel() {
@@ -30,25 +38,34 @@ class HomeViewModel(
     private val _state = MutableStateFlow(HomeUiState(loading = true))
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+
     init {
         load()
     }
 
-    fun load() {
+    fun load(forceRefresh: Boolean = false) {
+        loadJob?.cancel()
         _state.value = _state.value.copy(loading = true, error = null)
-        viewModelScope.launch {
-            val trending = repo.trending(perPage = 20)
-            val popularSeason = repo.popularThisSeason(currentSeason(), currentYear(), perPage = 20)
-            val topRated = repo.topRated(perPage = 20)
-            val upcoming = repo.upcoming(perPage = 20)
+        loadJob = viewModelScope.launch {
+            val trending = async { repo.trending(forceRefresh) }
+            val popularSeason = async { repo.popularThisSeason(forceRefresh) }
+            val topRated = async { repo.topRated(forceRefresh) }
+            val upcoming = async { repo.upcoming(forceRefresh) }
+            val trendingResult = trending.await()
+            val popularResult = popularSeason.await()
+            val topRatedResult = topRated.await()
+            val upcomingResult = upcoming.await()
             _state.value = HomeUiState(
-                trending = trending.getOrDefault(emptyList()),
-                popularSeason = popularSeason.getOrDefault(emptyList()),
-                topRated = topRated.getOrDefault(emptyList()),
-                upcoming = upcoming.getOrDefault(emptyList()),
+                trending = trendingResult.getOrDefault(emptyList()),
+                popularSeason = popularResult.getOrDefault(emptyList()),
+                topRated = topRatedResult.getOrDefault(emptyList()),
+                upcoming = upcomingResult.getOrDefault(emptyList()),
                 loading = false,
-                error = if (trending.isFailure && popularSeason.isFailure && topRated.isFailure && upcoming.isFailure)
-                    "No data available. Check your internet connection."
+                error = if (
+                    trendingResult.isFailure && popularResult.isFailure &&
+                    topRatedResult.isFailure && upcomingResult.isFailure
+                ) "No data available. Check your internet connection."
                 else null,
             )
         }

@@ -77,7 +77,7 @@ private val STATUSES = listOf(
 @Composable
 fun BrowseScreen(onAnimeClick: (Anime) -> Unit) {
     val context = LocalContext.current
-    val repo = remember { AnikageRepository(context) }
+    val repo = remember { AnikageRepository.get(context) }
     val viewModel: BrowseViewModel = viewModel(factory = BrowseViewModel.factory(repo))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val gridState = rememberLazyGridState()

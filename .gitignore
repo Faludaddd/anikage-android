@@ -13,6 +13,10 @@ captures/
 *.aab
 *.keystore
 *.jks
+# The committed release keystore is intentional: the repo is private and a
+# stable signing identity is required so CI builds update-install over the
+# previous release (ephemeral debug keys made every build un-installable).
+!keystore/anikage-release.jks
 
 # Logs / OS
 *.log

@@ -72,7 +72,7 @@ fun DetailsScreen(
     onWatchClick: (Int, Int) -> Unit,    // (animeId, episode)
 ) {
     val context = LocalContext.current
-    val repo = remember { AnikageRepository(context) }
+    val repo = remember { AnikageRepository.get(context) }
     val viewModel: DetailsViewModel = viewModel(
         factory = DetailsViewModel.factory(repo, animeId)
     )
@@ -272,27 +272,88 @@ fun DetailsScreen(
                         .padding(horizontal = Config.Spacing.lg, vertical = Config.Spacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.size(40.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = ep.number.toString(),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
+                    // Episode thumbnail (site uses TheTVDB stills) with number badge
+                    Box(modifier = Modifier.size(width = 72.dp, height = 44.dp)) {
+                        if (ep.thumbnail != null) {
+                            AsyncImage(
+                                model = ep.thumbnail,
+                                contentDescription = "Episode ${ep.number}",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
                             )
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .background(
+                                        Color.Black.copy(alpha = 0.7f),
+                                        RoundedCornerShape(topEnd = 8.dp),
+                                    )
+                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                            ) {
+                                Text(
+                                    text = ep.number.toString(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        } else {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = ep.number.toString(),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
                         }
                     }
                     Spacer(Modifier.width(Config.Spacing.md))
-                    Text(
-                        text = ep.title,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = ep.title,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (ep.airedAt != null) {
+                                Text(
+                                    text = ep.airedAt,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (ep.isFiller) {
+                                if (ep.airedAt != null) Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "FILLER",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                            if (ep.isRecap) {
+                                if (ep.airedAt != null || ep.isFiller) Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "RECAP",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    }
                     if (!ep.hasAired) {
                         Text(
                             text = "Upcoming",

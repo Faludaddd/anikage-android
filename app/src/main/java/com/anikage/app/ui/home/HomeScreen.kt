@@ -52,7 +52,7 @@ fun HomeScreen(
     onSeeAllClick: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    val repo = remember { AnikageRepository(context) }
+    val repo = remember { AnikageRepository.get(context) }
     val viewModel: HomeViewModel = viewModel(factory = HomeViewModel.factory(repo))
     val state by viewModel.state.collectAsStateWithLifecycle()
 

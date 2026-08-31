@@ -107,12 +107,22 @@ fun LoggerScreen(onBackClick: () -> Unit) {
     val listState = rememberLazyListState()
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.US) }
 
-    val filtered = entries.filter { e ->
-        (selectedLevels.value.isEmpty() || e.level in selectedLevels.value) &&
-            (selectedCategory == null || e.category == selectedCategory) &&
-            (query.isBlank() ||
-                e.message.contains(query, ignoreCase = true) ||
-                (e.error?.contains(query, ignoreCase = true) == true))
+    // Memoized filtering: recomputes ONLY when the entries or an actual
+    // filter input changes — not on every recomposition caused by each new
+    // log line. distinctBy is a hard guarantee that LazyColumn keys stay
+    // unique even if a future regression reintroduces duplicate ids
+    // (the v1.5.0 crash: two entries sharing one millisecond timestamp
+    // were used as keys and crashed composition).
+    val filtered = remember(entries, query, selectedLevels.value, selectedCategory) {
+        entries
+            .distinctBy { it.id }
+            .filter { e ->
+                (selectedLevels.value.isEmpty() || e.level in selectedLevels.value) &&
+                    (selectedCategory == null || e.category == selectedCategory) &&
+                    (query.isBlank() ||
+                        e.message.contains(query, ignoreCase = true) ||
+                        (e.error?.contains(query, ignoreCase = true) == true))
+            }
     }
     val latestId = entries.lastOrNull()?.id
 
@@ -125,12 +135,14 @@ fun LoggerScreen(onBackClick: () -> Unit) {
             }
     }
 
-    // Follow the tail when live scroll is active.
+    // Follow the tail when live scroll is active. Instant (non-animated)
+    // jump: logs arrive in bursts, and animating through dozens of new rows
+    // stalls the frame and fights the user's finger.
     LaunchedEffect(latestId) {
         if (autoScroll && filtered.isNotEmpty()) {
             programmaticScroll = true
             try {
-                listState.animateScrollToItem(filtered.size - 1)
+                listState.scrollToItem(filtered.size - 1)
             } finally {
                 programmaticScroll = false
             }

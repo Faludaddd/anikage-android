@@ -51,7 +51,7 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
     val context = LocalContext.current
-    val repo = remember { AnikageRepository(context) }
+    val repo = remember { AnikageRepository.get(context) }
     val viewModel: ScheduleViewModel = viewModel(factory = ScheduleViewModel.factory(repo))
     val state by viewModel.state.collectAsStateWithLifecycle()
 

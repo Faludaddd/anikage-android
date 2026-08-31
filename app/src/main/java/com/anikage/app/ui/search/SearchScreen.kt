@@ -43,7 +43,7 @@ import com.anikage.app.ui.components.LoadingGrid
 @Composable
 fun SearchScreen(onAnimeClick: (Anime) -> Unit) {
     val context = LocalContext.current
-    val repo = remember { AnikageRepository(context) }
+    val repo = remember { AnikageRepository.get(context) }
     val viewModel: SearchViewModel = viewModel(factory = SearchViewModel.factory(repo))
     val state by viewModel.state.collectAsStateWithLifecycle()
 

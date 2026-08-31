@@ -40,17 +40,17 @@ object Config {
     const val APP_SHORT_NAME = "Anikage"
 
     /** Version label (shown in About). */
-    const val APP_VERSION = "1.4.0"
+    const val APP_VERSION = "1.5.1"
 
     /** Version code (integer; bump for every release). */
-    const val APP_VERSION_CODE = 5
+    const val APP_VERSION_CODE = 7
 
     /** About / credits line. */
-    const val ABOUT_TEXT =
+    val ABOUT_TEXT =
         "Anikage is a native Android client for browsing and watching " +
         "anime. Built with Jetpack Compose, Media3 ExoPlayer, and the " +
-        "public AniList GraphQL API. Not affiliated with AniList or any " +
-        "streaming provider."
+        "Anikage REST API (anikage.cc) with AniList metadata. " +
+        "Not affiliated with AniList or any streaming provider."
 
     /** Optional link to your project (null = hide in About). */
     val PROJECT_URL: String? = null
@@ -138,38 +138,30 @@ object Config {
      */
 
     /**
-     * Base URL for Anikage's own REST API. Set this to a proxy backend
-     * (e.g. https://your-proxy.example.com) that holds Cloudflare cookies
-     * and forwards to https://anikage.cc. Leave null to use AniList only
-     * (the app's metadata layer falls back to AniList GraphQL when this is
-     * null).
-     *
-     * When set, the app will call:
-     *   {ANIKAGE_API_BASE_URL}/api/media/anime/browse?...
-     *   {ANIKAGE_API_BASE_URL}/api/media/anime/{slug}/episodes
-     *   {ANIKAGE_API_BASE_URL}/api/media/anime/{slug}/episodes/{ep}/servers
-     *   {ANIKAGE_API_BASE_URL}/api/media/anime/{slug}/episodes/{ep}/sources?...
+     * Base URL for Anikage's own REST API. Verified working directly from the
+     * app (no Cloudflare block observed for these JSON endpoints with a
+     * browser-like User-Agent). Leave null to fall back to AniList-only mode.
      */
-    val ANIKAGE_API_BASE_URL: String? = null
+    val ANIKAGE_API_BASE_URL: String? = "https://anikage.cc"
 
     /**
-     * Base URL for Anikage's auth/comment API. Separate from the media API
-     * because Anikage itself serves them from auth.anikage.cc. Set to your
-     * proxy if you want comments + view counts + MAL sync.
+     * Base URL for Anikage's auth/comment API (comments, view counts).
+     * Also verified working directly from the app. Leave null to disable
+     * comments / view counts.
      */
-    val ANIKAGE_AUTH_API_BASE_URL: String? = null
+    val ANIKAGE_AUTH_API_BASE_URL: String? = "https://auth.anikage.cc"
 
     /**
-     * Base URL for Anikage's stream proxy (og.bakayaro.live). When set,
-     * stream tokens returned by the sources endpoint will be appended to
-     * this URL: {STREAM_PROXY_BASE_URL}/m3u8/{token} for HLS, and
-     * {STREAM_PROXY_BASE_URL}/stream/{token} for thumbnails.
-     *
-     * Leave null to use the token directly against og.bakayaro.live (this
-     * will only work if the device has its own Cloudflare clearance for
-     * og.bakayaro.live, which is unlikely).
+     * Anikage site origin — sent as Referer/Origin headers on stream requests.
+     * og.bakayaro.live rejects stream tokens without these (403 "forbidden origin").
      */
-    val ANIKAGE_STREAM_PROXY_BASE_URL: String? = null
+    const val ANIKAGE_SITE_ORIGIN = "https://anikage.cc"
+
+    /**
+     * Base URL for Anikage's stream proxy (og.bakayaro.live). Stream tokens
+     * returned by the sources endpoint are resolved as {base}/m3u8/{token}.
+     */
+    val ANIKAGE_STREAM_PROXY_BASE_URL: String? = "https://og.bakayaro.live"
 
     // Default providers observed in the captured snapshot
     const val DEFAULT_STREAM_PROVIDER = "koto"     // koto, kiwi, neko, megg, dib, wave, zen
@@ -524,8 +516,15 @@ object Config {
         /** HTTP write timeout (seconds). */
         const val WRITE_TIMEOUT = 30
 
-        /** User-Agent for outgoing API requests. */
-        const val USER_AGENT = "Anikage/1.0.0 (Android; +https://anilist.co)"
+        /**
+         * Browser-like User-Agent for outgoing API requests. The Anikage API
+         * sits behind Cloudflare; a plain OkHttp UA risks a bot challenge,
+         * while a Chrome-mobile UA passes cleanly (verified against the live
+         * endpoints).
+         */
+        const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 16; SM-X216B) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
 
         /** OkHttp disk cache size in MB. */
         const val DISK_CACHE_MB = 64

@@ -6,6 +6,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.AnimeDetails
+import com.anikage.app.core.log.AppLogger
+import com.anikage.app.core.log.LogCategory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,15 +18,19 @@ data class DetailsUiState(
     val details: AnimeDetails? = null,
     val error: String? = null,
     val episodes: List<EpisodeUi> = emptyList(),
+    /** True when [episodes] came from the Anikage episodes API (real titles + thumbnails). */
+    val realEpisodes: Boolean = false,
 )
 
-/** Episode info for the episode list (synthesized from `episodes` count). */
+/** Episode info for the episode list. */
 data class EpisodeUi(
     val number: Int,
     val title: String = "Episode $number",
     val thumbnail: String? = null,
     val airedAt: String? = null,
     val hasAired: Boolean = true,
+    val isFiller: Boolean = false,
+    val isRecap: Boolean = false,
 )
 
 class DetailsViewModel(
@@ -47,6 +53,9 @@ class DetailsViewModel(
                         details = details,
                         episodes = synthesizeEpisodes(details),
                     )
+                    // Enrich with the site's real episode metadata (titles,
+                    // thumbnails, filler flags) when the slug resolves.
+                    loadRealEpisodes(details)
                 },
                 onFailure = { e ->
                     _state.value = _state.value.copy(
@@ -55,6 +64,33 @@ class DetailsViewModel(
                     )
                 }
             )
+        }
+    }
+
+    private suspend fun loadRealEpisodes(details: AnimeDetails) {
+        val slug = repo.resolveSlug(animeId, details.title.english, details.title.romaji)
+            ?: return
+        repo.anikageEpisodes(slug).onSuccess { eps ->
+            if (eps.isNotEmpty()) {
+                _state.value = _state.value.copy(
+                    episodes = eps.map { ep ->
+                        EpisodeUi(
+                            number = ep.number,
+                            title = ep.title?.takeIf { it.isNotBlank() } ?: "Episode ${ep.number}",
+                            thumbnail = ep.image,
+                            airedAt = ep.airDate,
+                            hasAired = true,
+                            isFiller = ep.isFiller,
+                            isRecap = ep.isRecap,
+                        )
+                    },
+                    realEpisodes = true,
+                )
+                AppLogger.i(
+                    LogCategory.DATA,
+                    "Loaded ${eps.size} real episodes for slug $slug (animeId=$animeId)",
+                )
+            }
         }
     }
 
@@ -76,11 +112,8 @@ class DetailsViewModel(
 }
 
 /**
- * AniList does not provide per-episode metadata (titles / thumbnails) via
- * the public GraphQL API — that data lives in paid / partner integrations.
- * We synthesize a simple "Episode N" list from the `episodes` count so the
- * episode list UI works. Real episode data would come from a separate
- * stream-source endpoint (see Config.STREAM_SOURCE_URL).
+ * Fallback when the Anikage episodes API is unavailable: synthesize an
+ * "Episode N" list from the AniList `episodes` count.
  */
 private fun synthesizeEpisodes(details: AnimeDetails): List<EpisodeUi> {
     val count = details.episodes

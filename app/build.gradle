@@ -13,11 +13,24 @@ android {
         applicationId "com.anikage.app"
         minSdk 24
         targetSdk 34
-        versionCode 5
-        versionName "1.4.0"
+        versionCode 7
+        versionName "1.5.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary true
+        }
+    }
+
+    // Stable release signing: a committed keystore (repo is private) so every
+    // CI build produces the SAME signature and updates install over previous
+    // versions. Previously the release build used the debug keystore, which is
+    // regenerated per machine — that made every build mutually un-installable.
+    signingConfigs {
+        release {
+            storeFile rootProject.file("keystore/anikage-release.jks")
+            storePassword System.getenv("ANIKAGE_KEYSTORE_PASSWORD") ?: "anikage2026"
+            keyAlias System.getenv("ANIKAGE_KEY_ALIAS") ?: "anikage"
+            keyPassword System.getenv("ANIKAGE_KEY_PASSWORD") ?: "anikage2026"
         }
     }
 
@@ -32,7 +45,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 
