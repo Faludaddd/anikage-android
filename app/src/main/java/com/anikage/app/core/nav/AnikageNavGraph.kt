@@ -63,7 +63,7 @@ fun AnikageApp() {
                     HomeScreen(
                         onAnimeClick = { navController.navigate(Routes.details(it.id)) },
                         onWatchClick = { navController.navigate(Routes.watch(it.id, 1)) },
-                        onSeeAllClick = { /* could navigate to Browse with filter */ },
+                        onSeeAllClick = { navController.navigate(Routes.BROWSE) },
                     )
                 }
                 composable(Routes.BROWSE) {

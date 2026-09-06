@@ -1,6 +1,7 @@
 package com.anikage.app.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -108,28 +109,28 @@ private fun HomeContent(
 
         if (state.popularSeason.isNotEmpty()) {
             item {
-                SectionHeader(title = "Popular This Season", eyebrow = "SEASONAL")
+                SectionHeader(title = "Popular This Season", eyebrow = "SEASONAL", onViewAll = { onSeeAllClick("popular") })
                 AnimeRow(items = state.popularSeason, onClick = onAnimeClick)
             }
         }
 
         if (state.trending.isNotEmpty()) {
             item {
-                SectionHeader(title = "Trending Now", eyebrow = "HOT")
+                SectionHeader(title = "Trending Now", eyebrow = "HOT", onViewAll = { onSeeAllClick("trending") })
                 AnimeRow(items = state.trending, onClick = onAnimeClick)
             }
         }
 
         if (state.topRated.isNotEmpty()) {
             item {
-                SectionHeader(title = "Most Favorite", eyebrow = "TOP")
+                SectionHeader(title = "Most Favorite", eyebrow = "TOP", onViewAll = { onSeeAllClick("favorite") })
                 AnimeRow(items = state.topRated, onClick = onAnimeClick)
             }
         }
 
         if (state.upcoming.isNotEmpty()) {
             item {
-                SectionHeader(title = "Upcoming", eyebrow = "SEASONAL")
+                SectionHeader(title = "Upcoming", eyebrow = "SEASONAL", onViewAll = { onSeeAllClick("upcoming") })
                 AnimeRow(items = state.upcoming, onClick = onAnimeClick)
             }
         }
@@ -137,7 +138,7 @@ private fun HomeContent(
 }
 
 @Composable
-fun SectionHeader(title: String, eyebrow: String? = null) {
+fun SectionHeader(title: String, eyebrow: String? = null, onViewAll: () -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -171,6 +172,7 @@ fun SectionHeader(title: String, eyebrow: String? = null) {
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             modifier = Modifier
                 .clip(RoundedCornerShape(50))
+                .clickable(onClick = onViewAll)
                 .padding(4.dp),
         ) {
             Text(
