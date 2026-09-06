@@ -47,7 +47,7 @@ import com.anikage.app.Config
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.ThemeState
 import com.anikage.app.core.theme.WebTextStyles
-import com.anikage.app.Config.Theme.WebTheme
+import com.anikage.app.Config.WebTheme
 
 /**
  * SETTINGS — 1:1 port of anikage.cc/settings (mobile).

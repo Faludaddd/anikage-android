@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -764,7 +765,7 @@ fun FeaturedBanner(
                                 .padding(horizontal = 14.dp, vertical = 6.dp),
                         ) {
                             Icon(
-                                androidx.compose.material.icons.Icons.Default.PlayArrow,
+                                Icons.Default.PlayArrow,
                                 contentDescription = null,
                                 tint = theme.actionFg,
                                 modifier = Modifier.size(12.dp),

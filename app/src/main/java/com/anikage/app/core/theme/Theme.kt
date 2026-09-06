@@ -17,7 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import com.anikage.app.Config
 import com.anikage.app.Config.Theme as CTheme
-import com.anikage.app.Config.Theme.WebTheme
+import com.anikage.app.Config.WebTheme
 
 /**
  * The active Anikage website theme (one of the 11 `[data-theme=...]` sets).
