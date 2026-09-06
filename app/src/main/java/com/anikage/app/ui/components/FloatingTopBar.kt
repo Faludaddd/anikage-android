@@ -109,7 +109,7 @@ fun FloatingTopBar(
                     )
 
                     if (isWideScreen) {
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                         // Nav tabs inside the pill
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -138,7 +138,7 @@ fun FloatingTopBar(
                     onClick = { onNavigate("search") })
                 RoundIconButton(icon = Icons.Default.Notifications, contentDescription = "Notifications",
                     onClick = { /* future: notifications drawer */ })
-                RoundIconButton(icon = Icons.Default.Settings, contentDescription = "Settings",
+                RoundIconButton(icon = Icons.Default.Person, contentDescription = "Profile",
                     onClick = { onNavigate("settings") })
             }
         }
@@ -159,7 +159,7 @@ private fun NavTabPill(
                 else Color.Transparent
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Text(
             text = label,

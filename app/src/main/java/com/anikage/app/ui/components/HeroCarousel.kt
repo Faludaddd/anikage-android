@@ -78,9 +78,9 @@ fun HeroCarousel(
     if (items.isEmpty()) return
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
-    // Anikage uses 72vh on mobile — we approximate with 0.6 of screen height
-    // (gives space for content below on smaller phones).
-    val heroHeight = screenHeight * 0.62f
+    // Keep the hero dominant like the web landing page while leaving the next
+    // rail discoverable below the fold.
+    val heroHeight = screenHeight * 0.70f
 
     var currentIndex by remember { mutableStateOf(0) }
     val totalItems = items.size
@@ -149,8 +149,8 @@ fun HeroCarousel(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .fillMaxWidth(0.85f)
-                .padding(start = 16.dp, end = 16.dp, bottom = 80.dp),
+                .fillMaxWidth(0.90f)
+                .padding(start = 18.dp, end = 18.dp, bottom = 86.dp),
         ) {
             // Anime "logo" — we use big bold text because AniList doesn't give us the anime's
             // logo image (Anikage uses the official logo image which they fetch from a separate
@@ -159,6 +159,7 @@ fun HeroCarousel(
                 text = current.displayTitle(),
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.25).sp,
                 color = Color.White,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

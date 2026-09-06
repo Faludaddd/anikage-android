@@ -55,7 +55,7 @@ fun AnimeCard(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable { onClick(anime) },
     ) {
         // Cover image
@@ -63,7 +63,7 @@ fun AnimeCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(Config.Images.POSTER_ASPECT)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             val imageUrl = anime.coverUrl()

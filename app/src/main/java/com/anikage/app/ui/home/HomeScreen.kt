@@ -105,28 +105,28 @@ private fun HomeContent(
 
         if (state.popularSeason.isNotEmpty()) {
             item {
-                SectionHeader(title = "Popular This Season")
+                SectionHeader(title = "Featured Anime", eyebrow = "EDITOR'S PICK")
                 AnimeRow(items = state.popularSeason, onClick = onAnimeClick)
             }
         }
 
         if (state.trending.isNotEmpty()) {
             item {
-                SectionHeader(title = "Trending Now")
+                SectionHeader(title = "Trending Now", eyebrow = "HOT")
                 AnimeRow(items = state.trending, onClick = onAnimeClick)
             }
         }
 
         if (state.topRated.isNotEmpty()) {
             item {
-                SectionHeader(title = "Top Rated")
+                SectionHeader(title = "Top Rated", eyebrow = "ALL TIME")
                 AnimeRow(items = state.topRated, onClick = onAnimeClick)
             }
         }
 
         if (state.upcoming.isNotEmpty()) {
             item {
-                SectionHeader(title = "Upcoming")
+                SectionHeader(title = "Upcoming", eyebrow = "SEASONAL")
                 AnimeRow(items = state.upcoming, onClick = onAnimeClick)
             }
         }
@@ -134,7 +134,7 @@ private fun HomeContent(
 }
 
 @Composable
-fun SectionHeader(title: String) {
+fun SectionHeader(title: String, eyebrow: String? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -142,12 +142,26 @@ fun SectionHeader(title: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge,
-            color = Color.White,
-            fontWeight = FontWeight.ExtraBold,
-        )
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            eyebrow?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Config.Theme.primary,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp,
+                )
+            }
+        }
         // "View All →" link
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -180,14 +194,14 @@ fun AnimeRow(
 ) {
     LazyRow(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp),
     ) {
         items(items) { anime ->
             AnimeCard(
                 anime = anime,
                 onClick = onClick,
-                modifier = Modifier.width(130.dp),
+                modifier = Modifier.width(132.dp),
             )
         }
     }
