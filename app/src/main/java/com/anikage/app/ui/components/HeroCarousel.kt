@@ -466,7 +466,17 @@ private fun NavArrowButton(
  * payload does not include a logo field. New server-provided values take
  * precedence through [Anime.clearLogoUrl]. */
 private fun clearLogoFor(title: String): String? = when {
+    title.contains("daemons of the shadow", ignoreCase = true) ->
+        "https://artworks.thetvdb.com/banners/v4/series/452711/clearlogo/69d14be996683.png"
     title.contains("bleach", ignoreCase = true) ->
         "https://artworks.thetvdb.com/banners/v4/series/74796/clearlogo/611b6233b8698.png"
+    title.contains("reincarnated as a slime", ignoreCase = true) ->
+        "https://artworks.thetvdb.com/banners/v4/series/352408/clearlogo/611c83c1eba90.png"
+    title.contains("black torch", ignoreCase = true) ->
+        "https://artworks.thetvdb.com/banners/v4/series/461194/clearlogo/6a544094daf9f.png"
+    title.contains("jaadugar", ignoreCase = true) || title.contains("witch in mongolia", ignoreCase = true) ->
+        "https://artworks.thetvdb.com/banners/v4/series/462561/clearlogo/6a544093580a5.png"
+    title.equals("one piece", ignoreCase = true) ->
+        "https://artworks.thetvdb.com/banners/v4/series/81797/clearlogo/611b6189d88b6.png"
     else -> null
 }
