@@ -82,6 +82,7 @@ class AnikageApi(
 
     /** Resolve a stream token to the HLS playlist URL. */
     fun resolveStreamUrl(token: String): String {
+        if (token.startsWith("http://") || token.startsWith("https://")) return token
         val proxy = Config.ANIKAGE_STREAM_PROXY_BASE_URL ?: "https://og.bakayaro.live"
         return "$proxy/m3u8/$token"
     }

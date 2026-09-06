@@ -49,6 +49,7 @@ import com.anikage.app.ui.components.LoadingGrid
 @Composable
 fun HomeScreen(
     onAnimeClick: (Anime) -> Unit,
+    onWatchClick: (Anime) -> Unit,
     onSeeAllClick: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -59,6 +60,7 @@ fun HomeScreen(
     HomeContent(
         state = state,
         onAnimeClick = onAnimeClick,
+        onWatchClick = onWatchClick,
         onSeeAllClick = onSeeAllClick,
         onRetry = viewModel::load,
     )
@@ -68,6 +70,7 @@ fun HomeScreen(
 private fun HomeContent(
     state: HomeUiState,
     onAnimeClick: (Anime) -> Unit,
+    onWatchClick: (Anime) -> Unit,
     onSeeAllClick: (String) -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -98,7 +101,7 @@ private fun HomeContent(
                 HeroCarousel(
                     items = state.trending.take(6),
                     onAnimeClick = onAnimeClick,
-                    onWatchClick = { anime -> onAnimeClick(anime) },
+                    onWatchClick = onWatchClick,
                 )
             }
         }

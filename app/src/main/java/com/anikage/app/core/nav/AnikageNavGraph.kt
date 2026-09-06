@@ -62,6 +62,7 @@ fun AnikageApp() {
                 composable(Routes.HOME) {
                     HomeScreen(
                         onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onWatchClick = { navController.navigate(Routes.watch(it.id, 1)) },
                         onSeeAllClick = { /* could navigate to Browse with filter */ },
                     )
                 }
@@ -81,7 +82,9 @@ fun AnikageApp() {
                     )
                 }
                 composable(Routes.MUSIC) {
-                    MusicScreen()
+                    MusicScreen(
+                        onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                    )
                 }
                 composable(Routes.TORRENTS) {
                     TorrentsScreen()

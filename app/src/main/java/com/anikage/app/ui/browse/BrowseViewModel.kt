@@ -24,6 +24,7 @@ data class BrowseUiState(
 )
 
 data class BrowseFilters(
+    val query: String = "",
     val season: String? = null,
     val year: Int? = null,
     val genre: String? = null,
@@ -53,7 +54,11 @@ class BrowseViewModel(
             filters = newFilters,
         )
         viewModelScope.launch {
-            val result = repo.browse(
+            val result = if (newFilters.query.isNotBlank()) repo.search(
+                query = newFilters.query,
+                page = 1,
+                perPage = 24,
+            ) else repo.browse(
                 page = 1, perPage = 24,
                 season = newFilters.season, year = newFilters.year,
                 genre = newFilters.genre, format = newFilters.format,
@@ -81,7 +86,11 @@ class BrowseViewModel(
         _state.value = current.copy(loadingMore = true)
         val nextPage = current.pageInfo.currentPage + 1
         viewModelScope.launch {
-            val result = repo.browse(
+            val result = if (current.filters.query.isNotBlank()) repo.search(
+                query = current.filters.query,
+                page = nextPage,
+                perPage = 24,
+            ) else repo.browse(
                 page = nextPage, perPage = 24,
                 season = current.filters.season, year = current.filters.year,
                 genre = current.filters.genre, format = current.filters.format,

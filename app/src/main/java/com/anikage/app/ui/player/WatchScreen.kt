@@ -214,6 +214,27 @@ fun WatchScreen(
             }
         }
 
+        state.streamError?.let { message ->
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp),
+                color = Color.Black.copy(alpha = 0.82f),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Playback unavailable", color = Color.White, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text(message, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(10.dp))
+                    Text("Try another episode or provider.", color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+
         // Comments panel (right-side sheet, like the site's comment section)
         AnimatedVisibility(
             visible = showComments,

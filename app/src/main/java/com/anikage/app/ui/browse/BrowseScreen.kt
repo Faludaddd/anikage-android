@@ -26,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -99,6 +100,17 @@ fun BrowseScreen(onAnimeClick: (Anime) -> Unit) {
                 titleContentColor = MaterialTheme.colorScheme.onBackground,
                 actionIconContentColor = MaterialTheme.colorScheme.onBackground,
             ),
+        )
+
+        TextField(
+            value = state.filters.query,
+            onValueChange = { viewModel.applyFilters(state.filters.copy(query = it)) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Config.Spacing.screenHorizontal),
+            singleLine = true,
+            placeholder = { Text("Search anime") },
+            label = { Text("Search") },
         )
 
         // Sort chip row (always visible)

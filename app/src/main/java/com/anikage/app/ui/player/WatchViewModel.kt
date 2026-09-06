@@ -183,14 +183,11 @@ class WatchViewModel(
             val streamUrl: String? = if (slug != null) {
                 repo.anikageStreamUrl(slug, episode)
             } else {
-                AppLogger.w(
-                    LogCategory.PLAYER,
-                    "No Anikage slug — using the sample stream (see Config.kt)",
-                )
-                Config.SAMPLE_STREAM_URL
+                AppLogger.w(LogCategory.PLAYER, "No Anikage slug — stream unavailable")
+                null
             }
             if (streamUrl == null) {
-                AppLogger.w(LogCategory.PLAYER, "No stream source resolved — using the sample stream")
+                AppLogger.w(LogCategory.PLAYER, "No stream source resolved")
             } else {
                 AppLogger.i(LogCategory.PLAYER, "Stream ready for episode $episode")
             }
@@ -200,10 +197,10 @@ class WatchViewModel(
             else 0L
 
             _state.value = _state.value.copy(
-                streamUrl = streamUrl ?: Config.SAMPLE_STREAM_URL,
+                streamUrl = streamUrl,
                 savedPositionMs = saved,
                 streamLoading = false,
-                streamError = if (streamUrl == null) "Stream unavailable — playing the sample stream." else null,
+                streamError = if (streamUrl == null) "No playable source was returned for this episode." else null,
             )
             preparePlayer(episode)
 

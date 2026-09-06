@@ -137,8 +137,8 @@ fun FloatingTopBar(
                 RoundIconButton(icon = Icons.Default.Search, contentDescription = "Search",
                     onClick = { onNavigate("search") })
                 RoundIconButton(icon = Icons.Default.Notifications, contentDescription = "Notifications",
-                    onClick = { /* future: notifications drawer */ })
-                RoundIconButton(icon = Icons.Default.Person, contentDescription = "Profile",
+                    onClick = { onNavigate("settings") })
+                RoundIconButton(icon = Icons.Default.Settings, contentDescription = "Settings",
                     onClick = { onNavigate("settings") })
             }
         }
