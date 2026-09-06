@@ -62,6 +62,7 @@ import coil.compose.AsyncImage
 import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
+import com.anikage.app.core.util.HtmlText
 import kotlinx.coroutines.launch
 
 /**
@@ -732,7 +733,7 @@ fun FeaturedBanner(
                         )
                         anime.description?.let { desc ->
                             Text(
-                                text = desc.replace(Regex("<[^>]*>"), "").trim(),
+                                text = HtmlText.clean(desc),
                                 style = WebTextStyles.xs,
                                 color = Color(0xFFA1A1AA),
                                 maxLines = 2,

@@ -59,6 +59,7 @@ import com.anikage.app.Config
 import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
+import com.anikage.app.core.util.HtmlText
 import kotlinx.coroutines.delay
 
 /**
@@ -247,7 +248,7 @@ fun HeroCarousel(
             // ── Synopsis (site: line-clamp-2 text-base leading-relaxed text-zinc-400)
             current.description?.takeIf { it.isNotBlank() }?.let { synopsis ->
                 Text(
-                    text = synopsis.replace(Regex("<[^>]*>"), "").trim(),
+                    text = HtmlText.clean(synopsis),
                     color = Color(0xFFA1A1AA),            // zinc-400
                     style = WebTextStyles.base,
                     lineHeight = 24.sp,

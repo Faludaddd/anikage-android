@@ -8,6 +8,7 @@ import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.AnimeDetails
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
+import com.anikage.app.core.util.HtmlText
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,7 +44,7 @@ class ScheduleDetailViewModel(
                     _state.value = ScheduleDetailUiState(
                         loading = false,
                         details = details,
-                        description = details.description?.let(::stripHtml),
+                        description = details.description?.let(HtmlText::clean),
                     )
                     // Resolve the slug in the background for the Watch CTA.
                     launch {
@@ -75,13 +76,3 @@ class ScheduleDetailViewModel(
             }
     }
 }
-
-private fun stripHtml(html: String): String =
-    html
-        .replace("<br\\s*/?>".toRegex(), "\n")
-        .replace("</p>|</li>".toRegex(), "\n")
-        .replace(Regex("<[^>]*>"), "")
-        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-        .replace("&quot;", "\"").replace("&#039;", "'").replace("&nbsp;", " ")
-        .replace("(Source: [^)]+\\)?\\s*$".toRegex(), "")
-        .trim()

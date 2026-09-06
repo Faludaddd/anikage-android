@@ -59,6 +59,7 @@ import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.data.model.AnimeDetails
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
+import com.anikage.app.core.util.HtmlText
 import com.anikage.app.ui.components.ErrorOrEmptyState
 import com.anikage.app.ui.components.LucideStarFilled
 import com.anikage.app.ui.components.SectionBadge
@@ -378,7 +379,7 @@ fun DetailsScreen(
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
                     Text(
-                        text = details.description?.let { stripHtml(it) } ?: "No description available.",
+                        text = details.description?.let(HtmlText::clean) ?: "No description available.",
                         style = WebTextStyles.sm,
                         color = Color(0xBFFFFFFF),   // site: text-white/75
                         lineHeight = 20.sp,
@@ -652,12 +653,6 @@ private fun EpisodeRow(
         }
     }
 }
-
-private fun stripHtml(html: String): String =
-    html.replace(Regex("<br\\s*/?>"), "\n")
-        .replace(Regex("<[^>]*>"), "")
-        .replace("(Source: [^)]+\\)?\\s*$".toRegex(), "")
-        .trim()
 
 /**
  * Branded loading state — mirrors the details page structure with pulsing
