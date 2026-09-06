@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -78,9 +79,13 @@ fun HeroCarousel(
     if (items.isEmpty()) return
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
-    // Keep the hero dominant like the web landing page while leaving the next
-    // rail discoverable below the fold.
-    val heroHeight = screenHeight * 0.70f
+    // Match the website breakpoints: 72vh phone, 90vh tablet, full viewport
+    // desktop. The next rail is intentionally below the fold on large screens.
+    val heroHeight = when {
+        configuration.screenWidthDp >= 900 -> screenHeight
+        configuration.screenWidthDp >= 600 -> screenHeight * 0.90f
+        else -> screenHeight * 0.72f
+    }
 
     var currentIndex by remember { mutableStateOf(0) }
     val totalItems = items.size
@@ -152,18 +157,24 @@ fun HeroCarousel(
                 .fillMaxWidth(0.90f)
                 .padding(start = 18.dp, end = 18.dp, bottom = 86.dp),
         ) {
-            // Anime "logo" — we use big bold text because AniList doesn't give us the anime's
-            // logo image (Anikage uses the official logo image which they fetch from a separate
-            // source — TheTVDB clearlogo. AniList's API doesn't expose logo images).
-            Text(
-                text = current.displayTitle(),
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-0.25).sp,
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val clearLogo = current.clearLogoUrl ?: clearLogoFor(current.displayTitle())
+            if (clearLogo != null) {
+                AsyncImage(
+                    model = clearLogo,
+                    contentDescription = current.displayTitle(),
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.heightIn(max = if (configuration.screenWidthDp < 600) 80.dp else 130.dp),
+                )
+            } else {
+                Text(
+                    text = current.displayTitle(),
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color.White,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
 
@@ -231,11 +242,16 @@ fun HeroCarousel(
                 }
             }
 
-            // Description
-            // (current.description is in the Anime model — but our hero uses the
-            // basic Anime object that doesn't include description; we skip the
-            // description text on the home hero to avoid an empty line. The full
-            // description appears on the Anime Details screen.)
+            current.description?.takeIf { it.isNotBlank() }?.let { synopsis ->
+                Text(
+                    text = synopsis.replace(Regex("<[^>]*>"), "").trim(),
+                    color = Color.White.copy(alpha = 0.78f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = if (configuration.screenWidthDp < 600) 2 else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
 
@@ -444,4 +460,13 @@ private fun NavArrowButton(
             )
         }
     }
+}
+
+/** Known official clearlogos used by the live Anikage hero when the catalogue
+ * payload does not include a logo field. New server-provided values take
+ * precedence through [Anime.clearLogoUrl]. */
+private fun clearLogoFor(title: String): String? = when {
+    title.contains("bleach", ignoreCase = true) ->
+        "https://artworks.thetvdb.com/banners/v4/series/74796/clearlogo/611b6233b8698.png"
+    else -> null
 }

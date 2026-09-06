@@ -56,6 +56,8 @@ data class Anime(
     val title: AnimeTitle = AnimeTitle(),
     val coverImage: CoverImage = CoverImage(),
     val bannerImage: String? = null,
+    /** Official transparent title artwork used by Anikage's hero carousel. */
+    val clearLogoUrl: String? = null,
     val description: String? = null,
     val averageScore: Int? = null,
     val meanScore: Int? = null,
