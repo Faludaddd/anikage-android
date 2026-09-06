@@ -105,7 +105,7 @@ private fun HomeContent(
 
         if (state.popularSeason.isNotEmpty()) {
             item {
-                SectionHeader(title = "Featured Anime", eyebrow = "EDITOR'S PICK")
+                SectionHeader(title = "Popular This Season", eyebrow = "SEASONAL")
                 AnimeRow(items = state.popularSeason, onClick = onAnimeClick)
             }
         }
@@ -119,7 +119,7 @@ private fun HomeContent(
 
         if (state.topRated.isNotEmpty()) {
             item {
-                SectionHeader(title = "Top Rated", eyebrow = "ALL TIME")
+                SectionHeader(title = "Most Favorite", eyebrow = "TOP")
                 AnimeRow(items = state.topRated, onClick = onAnimeClick)
             }
         }
