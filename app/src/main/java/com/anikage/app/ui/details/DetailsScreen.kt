@@ -98,15 +98,6 @@ fun DetailsScreen(
 
     if (state.loading) {
         Box(modifier = Modifier.fillMaxSize().background(theme.surface)) {
-            IconButton(
-                onClick = onBackClick,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(8.dp)
-                    .statusBarsPadding(),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = theme.fg)
-            }
             LoadingSpinner(modifier = Modifier.fillMaxSize())
         }
         return
@@ -119,7 +110,6 @@ fun DetailsScreen(
                 subtitle = state.error ?: "",
                 onAction = viewModel::load,
             )
-            BackButton(onBackClick)
         }
         return
     }
@@ -154,7 +144,8 @@ fun DetailsScreen(
                             )
                     )
                 }
-                BackButton(onBackClick)
+                // Site: the fixed top nav floats over the banner — no
+                // in-page back button on the info page.
 
                 // Poster — 170x245 centered, overlaps banner bottom.
                 Column(
@@ -503,28 +494,6 @@ fun DetailsScreen(
                 }
             }
         }
-    }
-}
-
-/** Site: back chevron floating over the banner. */
-@Composable
-private fun BackButton(onBackClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .statusBarsPadding()
-            .padding(12.dp)
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(Color(0x66000000))
-            .clickable(onClick = onBackClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            Icons.AutoMirrored.Filled.ArrowBack,
-            contentDescription = "Back",
-            tint = Color.White,
-            modifier = Modifier.size(20.dp),
-        )
     }
 }
 

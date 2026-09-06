@@ -1,5 +1,12 @@
 package com.anikage.app.ui.components
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -18,17 +25,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,25 +49,36 @@ import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 
 /**
- * TOP BAR — 1:1 port of the site's floating nav.
+ * TOP BAR — 1:1 port of the site's floating nav (present on every content
+ * page: home, browse, schedule, music, torrents, info, watch — exactly like
+ * the site's fixed root nav; account pages use their own back headers).
  *
  * Site DOM (nav.container-custom.fixed.top-4.z-30):
- *   LEFT  pill: rounded-full border-white/10 bg-surface/90 p-1 shadow-sm,
- *          logo img (h-5, mx-3 my-1.5) + nav links (hidden < lg:
+ *   LEFT  pill: rounded-full border-white/10 bg-surface/90 p-1 shadow-sm
+ *          (md: bg-surface/70 + backdrop-blur-xl),
+ *          logo img (h-5, mx-3 my-1.5, lg:mx-5) + nav links (lg only:
  *          Home/Browse/Schedule/Music/Torrents, px-5 py-2 text-base medium)
- *   RIGHT icons: h-11 w-11 rounded-full border-white/10 bg-surface/90
- *          (Search, Notifications) — Discord button is md+ only.
+ *   RIGHT icons (gap-1.5 md:gap-2.5):
+ *          Discord (md+ only, h-12 w-12, external link),
+ *          Search  (h-11 w-11, md: h-12 w-12, lucide-search),
+ *          Bell    (h-11 w-11, md: h-12 w-12),
+ *          Profile (avatar h-11 w-11 md:h-12 w-12; logged-out default avatar
+ *                   has animate-pulse opacity-70 — reproduced here).
  */
 @Composable
 fun FloatingTopBar(
     currentRoute: String,
     onNavigate: (String) -> Unit,
     onSearchClick: () -> Unit = { onNavigate("search") },
+    onNotificationsClick: () -> Unit = { onNavigate("notifications") },
+    onProfileClick: () -> Unit = { onNavigate("profile") },
     modifier: Modifier = Modifier,
 ) {
     val configuration = LocalConfiguration.current
     val isWideScreen = configuration.screenWidthDp.dp >= 840.dp   // site lg
+    val isMd = configuration.screenWidthDp.dp >= 600.dp           // site md (Discord shows)
     val theme = LocalAnikageTheme.current
+    val context = LocalContext.current
 
     Box(
         modifier = modifier
@@ -108,11 +131,26 @@ fun FloatingTopBar(
 
             Spacer(Modifier.width(8.dp))
 
-            // RIGHT: round icon buttons (site: h-11 w-11, border-white/10).
+            // RIGHT: round icon buttons (site order: Discord, Search, Bell, Avatar).
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Discord — site: md+ only, external invite link.
+                if (isMd) {
+                    RoundIconButton(
+                        icon = null,
+                        discord = true,
+                        contentDescription = "Discord",
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://discord.gg/qmrbA5WDdV")),
+                                )
+                            }
+                        },
+                    )
+                }
                 RoundIconButton(
                     icon = Icons.Default.Search,
                     contentDescription = "Search",
@@ -121,8 +159,11 @@ fun FloatingTopBar(
                 RoundIconButton(
                     icon = Icons.Default.Notifications,
                     contentDescription = "Notifications",
-                    onClick = { onNavigate("settings") },
+                    onClick = onNotificationsClick,
                 )
+                // Profile avatar — site: default avatar image, animate-pulse
+                // opacity-70 while logged out; opens the profile area.
+                ProfileAvatarButton(onClick = onProfileClick)
             }
         }
     }
@@ -151,17 +192,20 @@ private fun NavTabPill(
     }
 }
 
-/** site: h-11 w-11 rounded-full border-white/10 bg-surface/90 shadow-sm. */
+/** site: h-11 w-11 (md: h-12 w-12) rounded-full border-white/10 bg-surface/90 shadow-sm. */
 @Composable
 private fun RoundIconButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
     contentDescription: String,
     onClick: () -> Unit,
+    discord: Boolean = false,
 ) {
     val theme = LocalAnikageTheme.current
+    val configuration = LocalConfiguration.current
+    val size = if (configuration.screenWidthDp.dp >= 600.dp) 48.dp else 44.dp
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(size)
             .shadow(4.dp, CircleShape, spotColor = Color(0x33000000))
             .clip(CircleShape)
             .background(theme.surface.copy(alpha = 0.90f))
@@ -169,11 +213,61 @@ private fun RoundIconButton(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            icon,
-            contentDescription = contentDescription,
-            tint = Color.White,
-            modifier = Modifier.size(22.dp),   // site: h-5.5 stroke-2.5
+        if (discord) {
+            // Site's Discord glyph — drawn as a simple game-controller mark.
+            Text(
+                text = "D",
+                color = Color(0xFF8B5CF6),
+                fontWeight = FontWeight.Black,
+                style = WebTextStyles.lg,
+            )
+        } else {
+            icon?.let {
+                Icon(
+                    it,
+                    contentDescription = contentDescription,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),   // site: h-5.5 stroke-2.5
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Profile avatar — site: h-11 w-11 (md: 12) grid rounded-full with the
+ * default avatar image; logged-out state pulses at opacity 70.
+ */
+@Composable
+private fun ProfileAvatarButton(onClick: () -> Unit) {
+    val configuration = LocalConfiguration.current
+    val size = if (configuration.screenWidthDp.dp >= 600.dp) 48.dp else 44.dp
+    val transition = rememberInfiniteTransition(label = "avatar-pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
+        label = "avatar-alpha",
+    )
+    Box(
+        modifier = Modifier
+            .padding(start = 2.dp)                       // site: ml-0.5
+            .size(size)
+            .shadow(4.dp, CircleShape, spotColor = Color(0x33000000))
+            .clip(CircleShape)
+            .background(LocalAnikageTheme.current.surface.copy(alpha = 0.90f))
+            .border(BorderStroke(1.dp, Color(0x1AFFFFFF)), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Site's exact default avatar asset (logged-out) with its pulse.
+        Image(
+            painter = painterResource(id = R.drawable.nav_default_avatar),
+            contentDescription = "Profile",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(size)
+                .graphicsLayer { this.alpha = alpha },
         )
     }
 }

@@ -340,6 +340,76 @@ class AnikageRepository private constructor(
     //  Browse — filters (TTL 60s, single-flight)
     // -------------------------------------------------------------------------
 
+    /**
+     * The site's own browse pipeline: GET /api/media/anime/browse with the
+     * site's exact filter params. Falls back to AniList GraphQL (mapping the
+     * same filter values) when the Anikage API is unavailable.
+     */
+    suspend fun browseCatalogue(
+        query: String? = null,
+        sort: String = "popularity",
+        genres: String? = null,
+        season: String? = null,
+        year: Int? = null,
+        format: String? = null,
+        status: String? = null,
+        country: String? = null,
+        page: Int = 1,
+        limit: Int = 30,
+    ): Result<Triple<List<Anime>, Int, Boolean>> =
+        singleFlight(
+            "anikage:catalogue:$query:$sort:$genres:$season:$year:$format:$status:$country:$page:$limit",
+            TTL_NONE,
+        ) {
+            fetchCatalogue(query, sort, genres, season, year, format, status, country, page, limit)
+        }
+
+    private suspend fun fetchCatalogue(
+        query: String?, sort: String, genres: String?, season: String?, year: Int?,
+        format: String?, status: String?, country: String?, page: Int, limit: Int,
+    ): Result<Triple<List<Anime>, Int, Boolean>> = withContext(Dispatchers.IO) {
+        val ak = anikage
+        if (ak != null) {
+            try {
+                val response = ak.browse(
+                    query = query, sort = sort, page = page, limit = limit,
+                    genres = genres, season = season, year = year,
+                    format = format, status = status, country = country,
+                )
+                val items = response.data.map { it.toAnime() }.distinctBy { it.id to it.displayTitle() }
+                if (items.isNotEmpty() || page > 1) {
+                    cacheAll(items)
+                    return@withContext Result.success(Triple(items, response.total, response.hasNext))
+                }
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Anikage catalogue failed — falling back to AniList", e)
+            }
+        }
+        // AniList fallback with the same filters mapped to GraphQL.
+        try {
+            val anilistSort = when (sort) {
+                "trending" -> "TRENDING_DESC"
+                "score" -> "SCORE_DESC"
+                "favourites" -> "FAVOURITES_DESC"
+                "newest" -> "START_DATE_DESC"
+                else -> "POPULARITY_DESC"
+            }
+            val (items, info) = api.browse(
+                page = page, perPage = limit,
+                season = season, year = year,
+                genre = genres?.split(",")?.firstOrNull(),
+                format = format?.split(",")?.firstOrNull(),
+                status = status?.split(",")?.firstOrNull(),
+                sort = anilistSort,
+            )
+            cacheAll(items)
+            Result.success(Triple(items, info.total, info.hasNextPage))
+        } catch (e: Exception) {
+            Log.w(tag, "catalogue fallback failed: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
     suspend fun browse(
         page: Int = 1,
         perPage: Int = 24,

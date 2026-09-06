@@ -45,8 +45,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Session heartbeat keeps duration/status metadata fresh on disk.
+        AppLogger.heartbeat()
+        AppLogger.d(LogCategory.UI, "MainActivity.onResume")
+    }
+
     override fun onDestroy() {
-        AppLogger.d(LogCategory.UI, "MainActivity.onDestroy")
+        AppLogger.d(LogCategory.UI, "MainActivity.onDestroy (finishing=$isFinishing)")
+        // Only a real user-initiated finish counts as a clean COMPLETED
+        // session; a system kill leaves the session open -> next launch
+        // detects it as CRASHED (did not shut down normally).
+        if (isFinishing) AppLogger.markSessionCompleted()
         super.onDestroy()
     }
 }

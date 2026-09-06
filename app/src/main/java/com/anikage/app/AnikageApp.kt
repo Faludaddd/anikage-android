@@ -14,6 +14,8 @@ class AnikageApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppLogger.init(this)
+        // Restore persisted user settings (site's localStorage equivalents).
+        com.anikage.app.core.settings.SettingsState.init(this)
         AppLogger.i(
             LogCategory.APP,
             "Anikage starting — v${Config.APP_VERSION} (code ${Config.APP_VERSION_CODE}), " +

@@ -41,7 +41,9 @@ class SearchViewModel(
             val result = repo.search(q)
             result.fold(
                 onSuccess = { (items, _) ->
-                    _state.value = _state.value.copy(items = items, loading = false)
+                    // Dedupe (id+title) — lazy-list keys must be unique.
+                    val distinct = items.distinctBy { it.id to it.displayTitle() }
+                    _state.value = _state.value.copy(items = distinct, loading = false)
                 },
                 onFailure = { e ->
                     _state.value = _state.value.copy(

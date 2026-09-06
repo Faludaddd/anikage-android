@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -22,6 +23,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
@@ -139,6 +142,8 @@ fun WatchScreen(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            // Site: .watch-layout pt-20 lg:pt-23 — clears the fixed top nav.
+            contentPadding = PaddingValues(top = 64.dp),
         ) {
             // ── Player (site: player-glass rounded-2xl, 16:9) ──────────────
             item(key = "player") {
@@ -161,24 +166,6 @@ fun WatchScreen(
                             }
                         },
                     )
-                    // Back button overlay.
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(8.dp)
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0x66000000))
-                            .clickable(onClick = onBackClick),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
                     if (state.streamLoading) {
                         CircularProgressIndicator(
                             color = Color.White,
@@ -224,21 +211,37 @@ fun WatchScreen(
                             )
                         }
                     }
-                    // Refresh stream (re-resolve sources for this episode).
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(Color(0x08FFFFFF))
-                            .clickable { viewModel.reloadStream() },
-                        contentAlignment = Alignment.Center,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Reload",
-                            tint = theme.fgMuted,
-                            modifier = Modifier.size(16.dp),
+                        // Prev / Next episode (site: player control bar arrows).
+                        EpisodeNavButton(
+                            label = "Prev",
+                            enabled = state.episode > 1,
+                            onClick = { viewModel.switchEpisode(state.episode - 1) },
                         )
+                        EpisodeNavButton(
+                            label = "Next",
+                            enabled = state.episode < state.totalEpisodes,
+                            onClick = { viewModel.switchEpisode(state.episode + 1) },
+                        )
+                        // Refresh stream (re-resolve sources for this episode).
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x08FFFFFF))
+                                .clickable { viewModel.reloadStream() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Reload",
+                                tint = theme.fgMuted,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -367,6 +370,48 @@ fun WatchScreen(
             }
 
             item(key = "bottom-space") { Spacer(Modifier.height(96.dp)) }
+        }
+    }
+}
+
+/** Prev/Next episode chip — site player control arrows, pill styling. */
+@Composable
+private fun EpisodeNavButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (enabled) Color(0x0DFFFFFF) else Color(0x05FFFFFF))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    ) {
+        if (label == "Prev") {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                contentDescription = null,
+                tint = if (enabled) theme.fg else Color(0x50FFFFFF),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        Text(
+            text = label,
+            style = WebTextStyles.xs,
+            color = if (enabled) theme.fg else Color(0x50FFFFFF),
+            fontWeight = FontWeight.Medium,
+        )
+        if (label == "Next") {
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = if (enabled) theme.fg else Color(0x50FFFFFF),
+                modifier = Modifier.size(14.dp),
+            )
         }
     }
 }

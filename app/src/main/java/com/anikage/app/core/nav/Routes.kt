@@ -5,16 +5,19 @@ package com.anikage.app.core.nav
  * strings (e.g. "home" -> "feed") in one place if the app's IA changes.
  *
  * Routes (matching Anikage's actual routes extracted from the live site):
- *   /                 -> Discover / trending / sections
- *   /browse           -> Filterable grid (genres=, sort=, type=)
- *   /schedule         -> Airing schedule (this week)
- *   /search           -> Search input + results
- *   /music            -> OST info (Anikage-specific)
- *   /torrents         -> Anime info (Anikage-specific; disabled by default)
- *   /anime/info/{id}  -> Anime details (Anikage uses short IDs; we use AniList IDs)
- *   /anime/watch/{id} -> Native player (Anikage uses short IDs; we use AniList IDs)
- *   /settings         -> App settings (autoplays, stream quality, captions, etc.)
- *   /about            -> About / credits
+ *   /                    -> Discover / trending / sections
+ *   /browse              -> Filterable grid (genres=, sort=, type=)
+ *   /schedule            -> Airing schedule (this week)
+ *   /search              -> Search input + results
+ *   /music               -> OST info (Anikage-specific)
+ *   /torrents            -> Anime info (Anikage-specific)
+ *   /anime/info/{id}     -> Anime details
+ *   /anime/watch/{id}    -> Native player
+ *   /settings            -> App settings (Account/General/Player/Themes/About)
+ *   /notifications       -> Notification center (site /(account)/notifications)
+ *   /profile             -> Profile / account area (site /(account)/profile)
+ *   /diagnostics         -> In-app session logs (app-only; the site has no equivalent)
+ *   /about               -> About / credits
  */
 object Routes {
     const val HOME = "home"
@@ -24,7 +27,9 @@ object Routes {
     const val MUSIC = "music"
     const val TORRENTS = "torrents"
     const val SETTINGS = "settings"
-    const val LOGGER = "logger"
+    const val NOTIFICATIONS = "notifications"
+    const val PROFILE = "profile"
+    const val DIAGNOSTICS = "diagnostics"
     const val ABOUT = "about"
 
     const val DETAILS = "details/{id}"
@@ -38,8 +43,13 @@ object Routes {
         HOME, BROWSE, MUSIC, SCHEDULE, TORRENTS,
     )
 
-    /** Routes that show the top app bar (logo + search + bell + settings). */
+    /** Routes that show the top app bar (logo + search + bell + profile). */
     val topBarScreens: List<String> = listOf(
-        HOME, BROWSE, SCHEDULE, SEARCH, MUSIC, TORRENTS,
+        HOME, BROWSE, SCHEDULE, SEARCH, MUSIC, TORRENTS, DETAILS, WATCH,
+    )
+
+    /** Account pages use their own back headers (site: /(account) layout). */
+    val accountScreens: List<String> = listOf(
+        SETTINGS, NOTIFICATIONS, PROFILE,
     )
 }

@@ -98,7 +98,7 @@ fun MusicScreen(onAnimeClick: (Anime) -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                items(state.items, key = { it.id }) { anime ->
+                items(state.items, key = { "${it.id}-${it.displayTitle()}" }) { anime ->
                     AnimeCard(anime = anime, onClick = onAnimeClick)
                 }
             }

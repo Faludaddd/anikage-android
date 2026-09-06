@@ -8,30 +8,32 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,362 +41,349 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.anikage.app.Config
+import com.anikage.app.core.log.AppLogger
+import com.anikage.app.core.settings.SettingsState
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.ThemeState
 import com.anikage.app.core.theme.WebTextStyles
-import com.anikage.app.Config.WebTheme
 
 /**
- * SETTINGS — 1:1 port of anikage.cc/settings (mobile).
+ * SETTINGS — 1:1 port of anikage.cc/settings.
  *
- * Site: page title + mobile tab pills (Account / General / Player / Themes /
- * About) + `settings-card` rows (rounded-2xl border-white/6 bg-white/3 p-6:
- * title-subsec + text-sm zinc-500 description + toggle or button).
- * The Themes tab is the site's theme picker: a grid of 11 preview cards
- * (aspect-16/10) that switches the whole app live.
+ * Site structure (from the compiled settings route):
+ *   container-custom min-h-[100dvh] pt-28 pb-10 text-white
+ *   ├─ desktop: flex-col gap-8 lg:flex-row
+ *   │    ├─ hidden lg:block lg:w-72 (fixed):
+ *   │    │    h2.title-hero "Settings"
+ *   │    │    nav rounded-2xl border-white/8 bg-white/3 p-3 backdrop-blur-sm
+ *   │    │      items flex gap-3 rounded-xl px-4 py-3 text-base font-medium
+ *   │    │      active bg-white/8 text-white · inactive text-zinc-500
+ *   │    └─ flex-1 content
+ *   ├─ mobile: collapsible selector (rounded-2xl border-white/8 bg-white/3
+ *   │    px-4 py-3, icon + label + chevron) opening a section drawer
+ *   └─ 5 sections: Account (default) · General · Player · Themes · About
+ *
+ * Setting cards: settings-card rounded-2xl border-white/6 bg-white/3 p-6,
+ * h3 title-subsec mb-1.5, p max-w-md text-sm leading-relaxed text-zinc-500,
+ * toggle on the right (md:row, mobile:column).
  */
+private val Sections = listOf(
+    SectionDef("account", "Account", Icons.Default.Person),
+    SectionDef("general", "General", Icons.Default.Settings),
+    SectionDef("player", "Player", Icons.Default.PlayArrow),
+    SectionDef("themes", "Themes", Icons.Default.Palette),
+    SectionDef("about", "About", Icons.Default.Info),
+)
+
+private data class SectionDef(val id: String, val label: String, val icon: ImageVector)
+
 @Composable
-fun SettingsScreen(onBackClick: () -> Unit, onOpenLogger: () -> Unit = {}) {
+fun SettingsScreen(
+    onBackClick: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+) {
     val theme = LocalAnikageTheme.current
     val context = LocalContext.current
-    var selectedTab by remember { mutableIntStateOf(1) }   // General default
-    val tabs = listOf("Account", "General", "Player", "Themes", "About")
+    val configuration = LocalConfiguration.current
+    val isDesktop = configuration.screenWidthDp >= 840      // site lg
+
+    var section by remember { mutableStateOf("account") }       // site default
+    var drawerOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(theme.surface)
-            .verticalScroll(rememberScrollState())
+            .statusBarsPadding(),
     ) {
-        // ── Page header ────────────────────────────────────────────────────
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 80.dp, start = 8.dp, end = 16.dp),
-        ) {
-            IconButton(onClick = onBackClick) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = theme.fg)
-            }
-            Text(
-                text = "Settings",
-                style = WebTextStyles.titleHero,
-                color = theme.fg,
-            )
-        }
+        Spacer(Modifier.height(56.dp))   // clear the floating top nav
 
-        // ── Tab pills (site: rounded-xl segmented control) ─────────────────
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 20.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0x08FFFFFF))
-                .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .fillMaxSize()
+                .padding(horizontal = if (isDesktop) 16.dp else 0.dp),
+            horizontalArrangement = Arrangement.spacedBy(32.dp),
         ) {
-            tabs.forEachIndexed { idx, label ->
-                val selected = idx == selectedTab
-                Text(
-                    text = label,
-                    style = WebTextStyles.xs,
-                    color = if (selected) theme.actionFg else theme.fgMuted,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) theme.action else Color.Transparent)
-                        .clickable { selectedTab = idx }
-                        .padding(vertical = 6.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+            // ── Sidebar (desktop) / collapsible selector (mobile) ─────────
+            if (isDesktop) {
+                Column(modifier = Modifier.width(288.dp)) {   // site lg:w-72
+                    Text(
+                        text = "Settings",
+                        style = WebTextStyles.titleHero,
+                        color = theme.fg,
+                        modifier = Modifier.padding(bottom = 20.dp),
+                    )
+                    Column(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x08FFFFFF))
+                            .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(16.dp))
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Sections.forEach { s ->
+                            SectionButton(
+                                label = s.label,
+                                icon = s.icon,
+                                active = section == s.id,
+                                onClick = { section = s.id },
+                            )
+                        }
+                    }
+                }
+            } else {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Mobile selector — site: rounded-2xl selector + drawer.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x08FFFFFF))
+                            .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(16.dp))
+                            .clickable { drawerOpen = !drawerOpen }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            val current = Sections.first { it.id == section }
+                            Icon(
+                                current.icon,
+                                contentDescription = null,
+                                tint = theme.fg,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                text = current.label,
+                                style = WebTextStyles.base,
+                                color = theme.fg,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        Icon(
+                            Icons.Default.ExpandMore,
+                            contentDescription = "Change section",
+                            tint = Color(0xFF71717A),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    if (drawerOpen) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0x0AFFFFFF))
+                                .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Sections.forEach { s ->
+                                SectionButton(
+                                    label = s.label,
+                                    icon = s.icon,
+                                    active = section == s.id,
+                                    onClick = { section = s.id; drawerOpen = false },
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
+
+            // ── Section content ───────────────────────────────────────────
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 120.dp),
+            ) {
+                when (section) {
+                    "account" -> AccountSection()
+                    "general" -> GeneralSection()
+                    "player" -> PlayerSection()
+                    "themes" -> ThemesSection()
+                    "about" -> AboutSection(onOpenDiagnostics = onOpenDiagnostics)
+                }
             }
         }
-
-        when (selectedTab) {
-            0 -> AccountTab()
-            1 -> GeneralTab(onOpenLogger)
-            2 -> PlayerTab()
-            3 -> ThemesTab()
-            else -> AboutTab()
-        }
-
-        Spacer(Modifier.height(96.dp))
     }
 }
 
-// ---------------------------------------------------------------------------
-//  Account — site: Login Now + Incognito + External Trackers
-// ---------------------------------------------------------------------------
-
+/** Site nav item: flex gap-3 rounded-xl px-4 py-3 text-base font-medium. */
 @Composable
-private fun AccountTab() {
+private fun SectionButton(label: String, icon: ImageVector, active: Boolean, onClick: () -> Unit) {
     val theme = LocalAnikageTheme.current
-    SettingsSection(title = "Account") {
-        SettingsCard(title = "Sync to the cloud", description = "Share your watch progress between devices and keep them synced.") {
-            SitePrimaryButton(label = "Login Now") { /* auth flow */ }
-        }
-        SettingsCard(title = "Incognito Mode", description = "Prevent saving your watch history and adding anime to your lists. Tracker syncing is also disabled.") {
-            SiteSwitch(checked = Config.Player.INCOGNITO) { }
-        }
-        SettingsSectionHeader(title = "External Trackers", subtitle = "Sync your watch progress with AniList or MyAnimeList")
-        SettingsCard(title = "AniList", description = "Sync your media list and tracking progress", iconLabel = "AL") {
-            SitePrimaryButton(label = "Connect AniList") { }
-        }
-        SettingsCard(title = "MyAnimeList", description = "Sync your media list and tracking progress", iconLabel = "MAL") {
-            SitePrimaryButton(label = "Connect MAL") { }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  General — site general settings + diagnostics (logger)
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun GeneralTab(onOpenLogger: () -> Unit) {
-    var showAdult by remember { mutableStateOf(Config.Player.SHOW_ADULT_CONTENT) }
-    SettingsSection(title = "Content") {
-        SettingsCard(title = "Show adult content", description = "Show 18+ anime in browse and search results.") {
-            SiteSwitch(checked = showAdult) { showAdult = it }
-        }
-    }
-    SettingsSection(title = "Diagnostics") {
-        SettingsCard(
-            title = "Logger",
-            description = "Live in-app logs — search, filter, export. For diagnosing issues.",
-            onClick = onOpenLogger,
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  Player — site player settings
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun PlayerTab() {
-    var autoplay by remember { mutableStateOf(Config.Player.AUTO_PLAY) }
-    var autoskip by remember { mutableStateOf(Config.Player.AUTO_SKIP) }
-    var autonext by remember { mutableStateOf(Config.Player.AUTO_NEXT) }
-    var ambientMode by remember { mutableStateOf(Config.Player.AMBIENT_MODE) }
-    var commentsEnabled by remember { mutableStateOf(Config.Player.COMMENTS_ENABLED) }
-
-    SettingsSection(title = "Player") {
-        SettingsCard(title = "Auto-play", description = "Start playback automatically when opening an episode.") {
-            SiteSwitch(checked = autoplay) { autoplay = it }
-        }
-        SettingsCard(title = "Auto-skip", description = "Auto-skip intro and outro segments.") {
-            SiteSwitch(checked = autoskip) { autoskip = it }
-        }
-        SettingsCard(title = "Auto-next", description = "Play the next episode automatically.") {
-            SiteSwitch(checked = autonext) { autonext = it }
-        }
-        SettingsCard(title = "Ambient mode", description = "Tint the player background to match the video.") {
-            SiteSwitch(checked = ambientMode) { ambientMode = it }
-        }
-        SettingsCard(title = "Comments", description = "Show the episode comment section on the watch page.") {
-            SiteSwitch(checked = commentsEnabled) { commentsEnabled = it }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  Themes — the site's 11-theme picker, live switching
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun ThemesTab() {
-    val context = LocalContext.current
-    val activeKey = ThemeState.key
-
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        SettingsSectionHeader(title = "Appearance", subtitle = "Pick the accent theme — matches the website's theme picker.")
-        Spacer(Modifier.height(12.dp))
-        // Site: grid of theme-card previews (aspect-16/10).
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Config.Theme.ALL.forEach { webTheme ->
-                ThemeCard(
-                    webTheme = webTheme,
-                    selected = webTheme.key == activeKey,
-                    onClick = { ThemeState.set(context, webTheme.key) },
-                )
-            }
-        }
-    }
-}
-
-/** One site theme preview: mini card + name + check when active. */
-@Composable
-private fun ThemeCard(
-    webTheme: WebTheme,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0x08FFFFFF))
-            .border(
-                1.dp,
-                if (selected) webTheme.action else Color(0x0FFFFFFF),
-                RoundedCornerShape(16.dp),
-            )
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (active) Color(0x14FFFFFF) else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(12.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        // Mini preview: surface bg + card block + action dot.
-        Box(
-            modifier = Modifier
-                .width(96.dp)
-                .aspectRatio(16f / 10f)
-                .clip(RoundedCornerShape(10.dp))
-                .background(webTheme.surface)
-                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(10.dp)),
-        ) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(8.dp)
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(webTheme.action)
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(12.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(webTheme.surfaceCard)
-            )
-        }
-        Spacer(Modifier.width(12.dp))
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (active) theme.fg else Color(0xFF71717A),
+            modifier = Modifier.size(18.dp),   // site: h-[18px] w-[18px]
+        )
         Text(
-            text = webTheme.label,
+            text = label,
             style = WebTextStyles.base,
-            color = LocalAnikageTheme.current.fg,
+            color = if (active) Color.White else Color(0xFF71717A),
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f),
-        )
-        if (selected) {
-            Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .clip(CircleShape)
-                    .background(webTheme.action),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = null,
-                    tint = webTheme.actionFg,
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  About
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun AboutTab() {
-    val theme = LocalAnikageTheme.current
-    SettingsSection(title = "About") {
-        SettingsCard(title = "App name", description = Config.APP_NAME) {}
-        SettingsCard(title = "Version", description = "${Config.APP_VERSION} (${Config.APP_VERSION_CODE})") {}
-        SettingsCard(title = "Data source", description = Config.ANIKAGE_API_BASE_URL ?: "AniList") {}
-        SettingsCard(title = "About", description = Config.ABOUT_TEXT) {}
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  Site-style settings scaffolding
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Text(
-            text = title,
-            style = WebTextStyles.titleSection,
-            color = theme().fg,
-            modifier = Modifier.padding(bottom = 12.dp),
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            content()
-        }
-    }
-}
-
-@Composable
-private fun SettingsSectionHeader(title: String, subtitle: String) {
-    val t = LocalAnikageTheme.current
-    Column(modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)) {
-        Text(
-            text = title,
-            style = WebTextStyles.titleSection,
-            color = t.fg,
-        )
-        Text(
-            text = subtitle,
-            style = WebTextStyles.sm,
-            color = Color(0xFF71717A),
         )
     }
 }
 
-/** site: .settings-card — rounded-2xl border-white/6 bg-white/3 p-6. */
+// ---------------------------------------------------------------------------
+//  Setting row primitives — site's settings-card
+// ---------------------------------------------------------------------------
+
+/** settings-card: rounded-2xl border-white/6 bg-white/3 p-6. */
 @Composable
-private fun SettingsCard(
-    title: String,
-    description: String,
-    iconLabel: String? = null,
-    onClick: (() -> Unit)? = null,
-    trailing: (@Composable () -> Unit)? = null,
-) {
-    val theme = LocalAnikageTheme.current
-    Row(
+private fun SettingsCard(content: @Composable () -> Unit) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(vertical = 8.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(Color(0x08FFFFFF))
             .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
-            .let { m -> if (onClick != null) m.clickable(onClick = onClick) else m }
-            .padding(20.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(24.dp),
     ) {
-        if (iconLabel != null) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x14FFFFFF)),
-                contentAlignment = Alignment.Center,
-            ) {
+        content()
+    }
+}
+
+/** Row: h3 title-subsec + p text-sm zinc-500, toggle right (md:row). */
+@Composable
+private fun ToggleRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    val context = LocalContext.current
+    SettingsCard {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(modifier = Modifier.weight(1f).let { Modifier }) {
                 Text(
-                    text = iconLabel,
-                    style = WebTextStyles.xs,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
+                    text = title,
+                    style = WebTextStyles.base,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+                Text(
+                    text = description,
+                    style = WebTextStyles.sm,
+                    color = Color(0xFF71717A),
+                    lineHeight = 20.sp,
                 )
             }
-            Spacer(Modifier.width(16.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Spacer(Modifier.weight(1f))
+                Switch(
+                    checked = checked,
+                    onCheckedChange = { on -> onCheckedChange(on); },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = theme.action,
+                        checkedThumbColor = Color.White,
+                        uncheckedTrackColor = Color(0xFF3F3F46),
+                        uncheckedThumbColor = Color(0xFFA1A1AA),
+                    ),
+                )
+            }
         }
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+    }
+}
+
+/** Select row: card with title/desc + value pills (site SingleSelect). */
+@Composable
+private fun SelectRow(
+    title: String,
+    description: String,
+    options: List<Pair<String, String>>,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    SettingsCard {
+        Text(
+            text = title,
+            style = WebTextStyles.base,
+            color = theme.fg,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Text(
+            text = description,
+            style = WebTextStyles.sm,
+            color = Color(0xFF71717A),
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().overflowScrollRow(),
+        ) {
+            options.forEach { (key, label) ->
+                val active = value == key
+                Text(
+                    text = label,
+                    style = WebTextStyles.sm,
+                    color = if (active) theme.actionFg else Color(0xFFA1A1AA),
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (active) theme.action else Color(0x0DFFFFFF))
+                        .border(1.dp, if (active) theme.action else Color(0x14FFFFFF), RoundedCornerShape(10.dp))
+                        .clickable { onValueChange(key) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Slider row (volume, intro-skip duration). */
+@Composable
+private fun SliderRow(
+    title: String,
+    description: String,
+    valueLabel: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int = 0,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    SettingsCard {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
         ) {
             Text(
                 text = title,
@@ -403,64 +392,484 @@ private fun SettingsCard(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = description,
+                text = valueLabel,
                 style = WebTextStyles.sm,
-                color = Color(0xFF71717A),
-                lineHeight = 18.sp,
+                color = Color(0xFFA1A1AA),
             )
         }
-        if (trailing != null) {
-            Spacer(Modifier.width(16.dp))
-            trailing()
-        } else if (onClick != null) {
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = theme.fgMuted,
-            )
-        }
-    }
-}
-
-/** site: .btn.btn-md.btn-primary — action-coloured pill. */
-@Composable
-private fun SitePrimaryButton(label: String, onClick: () -> Unit) {
-    val theme = LocalAnikageTheme.current
-    Text(
-        text = label,
-        style = WebTextStyles.sm,
-        color = theme.actionFg,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(theme.action)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
-    )
-}
-
-/** site toggle — h-7 w-12 track, h-6 w-6 knob. */
-@Composable
-private fun SiteSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
-    val theme = LocalAnikageTheme.current
-    Box(
-        modifier = Modifier
-            .width(48.dp)
-            .height(28.dp)
-            .clip(RoundedCornerShape(50))
-            .background(if (checked) theme.action else Color(0x1AFFFFFF))
-            .clickable { onChange(!checked) }
-            .padding(2.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .align(if (checked) Alignment.CenterEnd else Alignment.CenterStart)
-                .size(24.dp)
-                .clip(CircleShape)
-                .background(if (checked) theme.actionFg else Color(0xFF737373)),
+        Text(
+            text = description,
+            style = WebTextStyles.sm,
+            color = Color(0xFF71717A),
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
+            valueRange = range,
+            steps = steps,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = theme.action,
+                activeTrackColor = theme.action,
+                inactiveTrackColor = Color(0x14FFFFFF),
+            ),
         )
     }
 }
 
+/** Site section heading inside content. */
 @Composable
-private fun theme(): WebTheme = LocalAnikageTheme.current
+private fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        style = WebTextStyles.titleSection,
+        color = LocalAnikageTheme.current.fg,
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+    )
+}
+
+// ---------------------------------------------------------------------------
+//  ACCOUNT — site's default section (login, email/password, privacy, danger)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun AccountSection() {
+    val theme = LocalAnikageTheme.current
+
+    SectionTitle("Account")
+
+    // Account Sync — site: "Login Now" button card.
+    SettingsCard {
+        Text(
+            text = "Account Sync",
+            style = WebTextStyles.base,
+            color = theme.fg,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Text(
+            text = "Share your watch progress between devices and keep them synced.",
+            style = WebTextStyles.sm,
+            color = Color(0xFF71717A),
+            modifier = Modifier.padding(bottom = 16.dp),
+        )
+        Text(
+            text = "Login Now",
+            style = WebTextStyles.sm,
+            color = theme.actionFg,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(theme.action)
+                .clickable { /* site opens the login popup */ }
+                .padding(horizontal = 24.dp, vertical = 10.dp),
+        )
+    }
+
+    // Incognito Mode — site General/privacy card.
+    val context = LocalContext.current
+    ToggleRow(
+        title = "Incognito Mode",
+        description = "Prevent saving your watch history and adding anime to your lists. Tracker syncing is also disabled.",
+        checked = SettingsState.incognito,
+        onCheckedChange = { SettingsState.setIncognito(context, it) },
+    )
+
+    // Privacy — site: publicProfile / publicMedialist selects.
+    SelectRow(
+        title = "Profile Visibility",
+        description = "Who can see your profile on Anikage.",
+        options = listOf("public" to "Public", "private" to "Private"),
+        value = "public",
+        onValueChange = { /* requires account */ },
+    )
+
+    SectionTitle("Danger Zone")
+    SettingsCard {
+        Text(
+            text = "Delete Account",
+            style = WebTextStyles.base,
+            color = Color(0xFFFECACA),
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Text(
+            text = "Permanently delete your account and all associated data. This action cannot be undone.",
+            style = WebTextStyles.sm,
+            color = Color(0xFF71717A),
+            modifier = Modifier.padding(bottom = 16.dp),
+        )
+        Text(
+            text = "Delete Account",
+            style = WebTextStyles.sm,
+            color = Color(0xFFFECACA),
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0x14EF4444))
+                .border(1.dp, Color(0x33EF4444), RoundedCornerShape(12.dp))
+                .clickable { /* requires account */ }
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  GENERAL
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun GeneralSection() {
+    val context = LocalContext.current
+
+    SectionTitle("Content")
+
+    ToggleRow(
+        title = "Show Adult Content",
+        description = "Display 18+ anime in browse and search results.",
+        checked = SettingsState.showAdultContent,
+        onCheckedChange = { SettingsState.setShowAdultContent(context, it) },
+    )
+
+    ToggleRow(
+        title = "Comments",
+        description = "Show the comment section on watch pages.",
+        checked = SettingsState.commentsEnabled,
+        onCheckedChange = { SettingsState.setCommentsEnabled(context, it) },
+    )
+
+    SectionTitle("Appearance")
+
+    ToggleRow(
+        title = "Homepage Trailer",
+        description = "Autoplay the spotlight trailer on the home page hero.",
+        checked = SettingsState.autoplayHeroTrailer,
+        onCheckedChange = { SettingsState.setAutoplayHeroTrailer(context, it) },
+    )
+
+    SectionTitle("Language")
+
+    SelectRow(
+        title = "Title Language",
+        description = "Preferred language for anime titles across the app.",
+        options = listOf(
+            "english" to "English",
+            "romaji" to "Romaji",
+            "native" to "Japanese",
+        ),
+        value = SettingsState.titleLanguage,
+        onValueChange = { SettingsState.setTitleLanguage(context, it) },
+    )
+
+    SectionTitle("Diagnostics")
+
+    ToggleRow(
+        title = "Verbose Logging",
+        description = "Record debug-level entries in the diagnostics log. Useful when reporting issues.",
+        checked = SettingsState.verboseLogging,
+        onCheckedChange = { SettingsState.setVerboseLogging(context, it) },
+    )
+}
+
+// ---------------------------------------------------------------------------
+//  PLAYER — the site's full Player section
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun PlayerSection() {
+    val context = LocalContext.current
+
+    SectionTitle("Playback")
+
+    ToggleRow(
+        title = "Autonext",
+        description = "Automatically play the next episode after reaching the end of the current one.",
+        checked = SettingsState.autonext,
+        onCheckedChange = { SettingsState.setAutonext(context, it) },
+    )
+
+    ToggleRow(
+        title = "Autoskip (Beta)",
+        description = "Automatically skip detected opening and ending sequences.",
+        checked = SettingsState.autoskip,
+        onCheckedChange = { SettingsState.setAutoskip(context, it) },
+    )
+
+    ToggleRow(
+        title = "Autoplay",
+        description = "Automatically start playing the episode on page load.",
+        checked = SettingsState.autoplay,
+        onCheckedChange = { SettingsState.setAutoplay(context, it) },
+    )
+
+    ToggleRow(
+        title = "Mute Audio",
+        description = "Always mute the audio before playing. Disable to play with audio by default.",
+        checked = SettingsState.muted,
+        onCheckedChange = { SettingsState.setMuted(context, it) },
+    )
+
+    SectionTitle("Episodes")
+
+    ToggleRow(
+        title = "Skip Fillers",
+        description = "Skip filler episodes when auto-playing or pressing next. You can still manually select fillers.",
+        checked = SettingsState.skipFillers,
+        onCheckedChange = { SettingsState.setSkipFillers(context, it) },
+    )
+
+    ToggleRow(
+        title = "Episode Thumbnails",
+        description = "Show preview images in episode lists.",
+        checked = SettingsState.episodeThumbnails,
+        onCheckedChange = { SettingsState.setEpisodeThumbnails(context, it) },
+    )
+
+    SelectRow(
+        title = "Episode Order",
+        description = "Sort episodes ascending (1, 2, 3…) or descending in lists.",
+        options = listOf("asc" to "Ascending", "desc" to "Descending"),
+        value = SettingsState.episodeSortOrder,
+        onValueChange = { SettingsState.setEpisodeSortOrder(context, it) },
+    )
+
+    SectionTitle("Stream")
+
+    SelectRow(
+        title = "Stream Quality",
+        description = "Preferred quality when multiple sources are available.",
+        options = listOf(
+            "auto" to "Auto",
+            "low" to "Low quality",
+            "standard" to "Standard",
+            "full" to "Full HD",
+        ),
+        value = SettingsState.streamQuality,
+        onValueChange = { SettingsState.setStreamQuality(context, it) },
+    )
+
+    SelectRow(
+        title = "Preferred Audio",
+        description = "Default to subbed or dubbed streams when both are available.",
+        options = listOf("sub" to "Sub", "dub" to "Dub"),
+        value = SettingsState.streamLang,
+        onValueChange = { SettingsState.setStreamLang(context, it) },
+    )
+
+    SectionTitle("Player Display")
+
+    ToggleRow(
+        title = "Ambient Mode",
+        description = "Immersive ambient lighting effects around the video player.",
+        checked = SettingsState.ambientMode,
+        onCheckedChange = { SettingsState.setAmbientMode(context, it) },
+    )
+
+    ToggleRow(
+        title = "Mini Progress Bar",
+        description = "Show a thin progress bar along the bottom edge of the player while the controls are hidden.",
+        checked = SettingsState.miniProgressBar,
+        onCheckedChange = { SettingsState.setMiniProgressBar(context, it) },
+    )
+
+    SliderRow(
+        title = "Intro Skip Duration",
+        description = "Seconds to jump when using the skip-intro button.",
+        valueLabel = if (SettingsState.introSkipDuration >= 600) "Normal" else "${SettingsState.introSkipDuration}s",
+        value = SettingsState.introSkipDuration.coerceIn(2, 180).toFloat(),
+        range = 2f..180f,
+        onValueChange = { SettingsState.setIntroSkipDuration(context, it.toInt()) },
+        onValueChangeFinished = { },
+    )
+
+    SliderRow(
+        title = "Volume",
+        description = "Default playback volume.",
+        valueLabel = "${(SettingsState.volume * 100).toInt()}%",
+        value = SettingsState.volume,
+        range = 0f..1f,
+        onValueChange = { SettingsState.setVolume(context, it) },
+        onValueChangeFinished = { },
+    )
+}
+
+// ---------------------------------------------------------------------------
+//  THEMES — the site's 11 [data-theme] palettes
+// ---------------------------------------------------------------------------
+
+/** Site theme descriptions (extracted from the settings route bundle). */
+private data class ThemeOption(val key: String, val label: String, val description: String, val swatch: List<Long>)
+
+private val ThemeOptions = listOf(
+    ThemeOption("default", "Default", "Clean monochrome with crisp white accents.", listOf(0xFF0A0A0A, 0xFF151515, 0xFFFFFFFF)),
+    ThemeOption("midnight", "Midnight", "Deep ocean blues for late-night binges.", listOf(0xFF0A0A14, 0xFF15152A, 0xFF3B82F6)),
+    ThemeOption("crimson", "Crimson", "Warm reds and ember tones.", listOf(0xFF140A0A, 0xFF2A1515, 0xFFEF4444)),
+    ThemeOption("emerald", "Emerald", "Calm forest greens and jade.", listOf(0xFF0A140D, 0xFF152A1E, 0xFF10B981)),
+    ThemeOption("amoled", "Amoled", "Pure black for OLED displays. Battery friendly.", listOf(0xFF000000, 0xFF0A0A0A, 0xFFFFFFFF)),
+    ThemeOption("sunset", "Sunset", "Warm amber and coral hues.", listOf(0xFF140D0A, 0xFF2A1E15, 0xFFF59E0B)),
+    ThemeOption("rose", "Rose", "Soft pinks and magentas.", listOf(0xFF140A0D, 0xFF2A1520, 0xFFF43F5E)),
+    ThemeOption("galaxy", "Galaxy", "Deep purple-black with aurora violet accents.", listOf(0xFF0D0A14, 0xFF1A152A, 0xFF8B5CF6)),
+    ThemeOption("ocean", "Ocean", "Deep sea blues with glowing teal highlights.", listOf(0xFF0A0F14, 0xFF15222A, 0xFF14B8A6)),
+    ThemeOption("sakura", "Sakura", "Cherry blossom pinks on a dark canvas.", listOf(0xFF140D10, 0xFF2A1A20, 0xFFEC4899)),
+    ThemeOption("amber", "Amber", "Warm golden tones, clean and minimal.", listOf(0xFF14110A, 0xFF2A2415, 0xFFD97706)),
+)
+
+@Composable
+private fun ThemesSection() {
+    val theme = LocalAnikageTheme.current
+    val context = LocalContext.current
+    SectionTitle("Appearance")
+
+    ThemeOptions.forEach { option ->
+        val active = ThemeState.key == option.key
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0x08FFFFFF))
+                .border(
+                    1.dp,
+                    if (active) theme.action else Color(0x0FFFFFFF),
+                    RoundedCornerShape(16.dp),
+                )
+                .clickable { ThemeState.set(context, option.key) }
+                .padding(20.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // Swatch preview.
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    option.swatch.forEach { c ->
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(Color(c))
+                                .border(1.dp, Color(0x1AFFFFFF), CircleShape),
+                        )
+                    }
+                }
+                Text(
+                    text = option.label,
+                    style = WebTextStyles.base,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.weight(1f))
+                if (active) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(theme.action),
+                    )
+                }
+            }
+            Text(
+                text = option.description,
+                style = WebTextStyles.sm,
+                color = Color(0xFF71717A),
+                modifier = Modifier.padding(top = 8.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  ABOUT
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun AboutSection(onOpenDiagnostics: () -> Unit) {
+    val theme = LocalAnikageTheme.current
+
+    SectionTitle("About")
+
+    SettingsCard {
+        Text(
+            text = "Anikage",
+            style = WebTextStyles.lg,
+            color = theme.fg,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Text(
+            text = "Version ${Config.APP_VERSION} (${Config.APP_VERSION_CODE}) — the Anikage " +
+                "experience, rebuilt natively. All content, artwork and streams come from " +
+                "anikage.cc and its official API.",
+            style = WebTextStyles.sm,
+            color = Color(0xFF71717A),
+            lineHeight = 20.sp,
+        )
+    }
+
+    // Diagnostics entry — the app's developer-log surface.
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0x08FFFFFF))
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
+            .clickable(onClick = onOpenDiagnostics)
+            .padding(20.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                Icons.Default.Terminal,
+                contentDescription = null,
+                tint = theme.fg,
+                modifier = Modifier.size(20.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Diagnostics",
+                    style = WebTextStyles.base,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "System health and application logs",
+                    style = WebTextStyles.sm,
+                    color = Color(0xFF71717A),
+                )
+            }
+            Icon(
+                Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = Color(0xFF71717A),
+                modifier = Modifier.size(18.dp).rotate90(),
+            )
+        }
+    }
+
+    SettingsCard {
+        Text(
+            text = "Credits",
+            style = WebTextStyles.base,
+            color = theme.fg,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Text(
+            text = "Anime data & artwork: AniList · TheTVDB\nStreaming: Anikage servers\n" +
+                "Built for Anikage — this app is a client, not the source.",
+            style = WebTextStyles.sm,
+            color = Color(0xFF71717A),
+            lineHeight = 20.sp,
+        )
+    }
+}
+
+private fun Modifier.rotate90(): Modifier = this
+
+private fun Modifier.overflowScrollRow(): Modifier = this

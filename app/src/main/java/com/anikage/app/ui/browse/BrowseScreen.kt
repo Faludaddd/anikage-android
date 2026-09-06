@@ -1,39 +1,45 @@
 package com.anikage.app.ui.browse
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,10 +47,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,255 +64,233 @@ import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
-import com.anikage.app.ui.components.ErrorOrEmptyState
-import com.anikage.app.ui.components.LoadingGrid
+import com.anikage.app.ui.components.LoadingSpinner
 
 /**
- * BROWSE — 1:1 port of anikage.cc/browse (mobile).
+ * BROWSE — 1:1 port of anikage.cc/browse.
  *
- * Site chrome (no M3 app bar — the floating top nav handles it):
- *   ├─ toolbar: search input (rounded-xl border-white/8 bg-white/5, search
- *   │  icon start, text-sm font-semibold) + filter toggle + reset buttons
- *   │  (bg-white/5 rounded-xl, size-5 icons)
- *   ├─ grid: repeat(auto-fill, minmax(105px, 1fr)) gap-4 (3 cols on phones)
- *   └─ card: aspect-2/3 rounded-xl cover + centered title below
- *      (px-1.5 pt-1.5 text-xs font-medium text-fg-muted), no pill
- * Filters open in a bottom sheet with the site's radio-group sections.
+ * Site DOM (extracted from the live page):
+ *   container-custom min-h-[100dvh] pt-20 lg:pt-23
+ *   ├─ MOBILE (<lg): flex w-full gap-3
+ *   │    [search input flex-1 rounded-xl bg-white/5 px-4 py-2.5 ps-10
+ *   │     text-sm font-semibold placeholder "Search"]
+ *   │    [toggle-filters btn bg-white/5 px-3 py-2.5 (Tune icon)]
+ *   │    [reset btn bg-white/5 px-3 py-2.5 (trash, disabled:opacity-50)]
+ *   │    filter panel (expanded): 2-col grid of selects —
+ *   │      Genres | Sort by · Season | Year · Status | Format · Origin
+ *   ├─ DESKTOP (lg+): flex-row gap-4
+ *   │    [Search flex-1 (label "Search" title-subsec)] [Genres w-180]
+ *   │    [Sort by w-180 (default "Popularity")] [Year w-150] [Reset self-end]
+ *   │    mt-5 flex-row gap-6:
+ *   │      [sidebar hidden lg:flex min-w-200 gap-4: accordions
+ *   │        Season(open) / Format / Status / Origin — radio rows]
+ *   │      [results grid minmax(105px,1fr) gap-4 sm:135 md:155]
+ *
+ * Data comes from the site's own /api/media/anime/browse so the results
+ * match anikage.cc by construction (AniList GraphQL is only a fallback).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BrowseScreen(onAnimeClick: (Anime) -> Unit) {
-    val context = LocalContext.current
+fun BrowseScreen(
+    onAnimeClick: (Anime) -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val repo = remember { AnikageRepository.get(context) }
     val viewModel: BrowseViewModel = viewModel(factory = BrowseViewModel.factory(repo))
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val gridState = rememberLazyGridState()
-    val isTablet = LocalConfiguration.current.screenWidthDp >= 600
-    var showFilters by remember { mutableStateOf(false) }
     val theme = LocalAnikageTheme.current
+
+    val configuration = LocalConfiguration.current
+    val isDesktop = configuration.screenWidthDp >= 840     // site lg breakpoint
+    var filtersOpen by remember { mutableStateOf(false) }
+
+    // Infinite scroll: fetch the next page when the end is near.
+    val gridState = rememberLazyGridState()
+    val shouldLoadMore by remember {
+        derivedStateOf {
+            val info = gridState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            state.hasNextPage && !state.loadingMore && !state.loading &&
+                info.totalItemsCount > 0 && last >= info.totalItemsCount - 6
+        }
+    }
+    LaunchedEffect(shouldLoadMore) {
+        if (shouldLoadMore) viewModel.loadMore()
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(theme.surface)
-            // Site: container pt-20 (clears the floating top nav).
-            .padding(top = 80.dp),
+            .statusBarsPadding(),
     ) {
-        // ── Toolbar (site: search + filter + reset) ─────────────────────────
+        // ── Top clearance: site pt-20 (content starts under the floating nav).
+        Spacer(Modifier.height(if (isDesktop) 68.dp else 56.dp))
+
+        if (isDesktop) {
+            DesktopFilterRow(
+                filters = state.filters,
+                onChange = viewModel::setFilters,
+                onReset = viewModel::resetFilters,
+            )
+        } else {
+            MobileFilterBar(
+                query = state.filters.query,
+                onQuery = viewModel::setQuery,
+                filtersOpen = filtersOpen,
+                onToggle = { filtersOpen = !filtersOpen },
+                canReset = !state.filters.isDefault,
+                onReset = viewModel::resetFilters,
+            )
+            AnimatedVisibility(
+                visible = filtersOpen,
+                enter = expandVertically(),
+                exit = shrinkVertically(),
+            ) {
+                MobileFilterPanel(
+                    filters = state.filters,
+                    onChange = viewModel::setFilters,
+                )
+            }
+        }
+
+        // ── Results ───────────────────────────────────────────────────────
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.Bottom,
+                .fillMaxSize()
+                .padding(top = if (isDesktop) 20.dp else 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),   // site gap-6
         ) {
-            // Search input — site: rounded-xl border-white/8 bg-white/5 ps-10.
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(41.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x0DFFFFFF))
-                    .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp)),
-            ) {
-                Icon(
-                    Icons.Default.Search,
-                    contentDescription = null,
-                    tint = theme.fgMuted,
+            if (isDesktop) {
+                DesktopFilterSidebar(
+                    filters = state.filters,
+                    onChange = viewModel::setFilters,
                     modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 12.dp)
-                        .size(16.dp),
-                )
-                androidx.compose.foundation.text.BasicTextField(
-                    value = state.filters.query,
-                    onValueChange = { viewModel.applyFilters(state.filters.copy(query = it)) },
-                    singleLine = true,
-                    textStyle = WebTextStyles.sm.copy(
-                        color = Color(0xE6FFFFFF),
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(theme.action),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.CenterStart)
-                        .padding(start = 40.dp, end = 12.dp)
-                        .height(41.dp),
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.CenterStart) {
-                            if (state.filters.query.isEmpty()) {
-                                Text(
-                                    text = "Search",
-                                    style = WebTextStyles.sm,
-                                    color = Color(0xFF71717A),
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                            inner()
-                        }
-                    },
+                        .width(200.dp)
+                        .verticalScroll(rememberScrollState()),
                 )
             }
 
-            // Filter toggle — site: bg-white/5 rounded-xl px-3 py-2.5.
-            Box(
-                modifier = Modifier
-                    .height(41.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x0DFFFFFF))
-                    .clickable { showFilters = true }
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.FilterList,
-                    contentDescription = "Toggle filters",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp),
-                )
+            // Grid (site: minmax(105px,1fr) gap-4; sm:135 md:155).
+            val minCard = when {
+                configuration.screenWidthDp >= 840 -> 155.dp
+                configuration.screenWidthDp >= 600 -> 135.dp
+                else -> 105.dp
             }
-
-            // Reset — site: same style, disabled when no filters.
-            val hasFilters = state.filters.season != null || state.filters.year != null ||
-                state.filters.genre != null || state.filters.format != null ||
-                state.filters.status != null || state.filters.sort != "POPULARITY_DESC"
-            Box(
-                modifier = Modifier
-                    .height(41.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x0DFFFFFF))
-                    .clickable(enabled = hasFilters) {
-                        viewModel.applyFilters(
-                            state.filters.copy(
-                                season = null, year = null, genre = null,
-                                format = null, status = null, sort = "POPULARITY_DESC",
-                            )
-                        )
+            Box(modifier = Modifier.weight(1f)) {
+                when {
+                    state.loading -> {
+                        LoadingSpinner(modifier = Modifier.fillMaxSize())
                     }
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Close,
-                    contentDescription = "Reset filters",
-                    tint = if (hasFilters) Color.White else Color(0x4DFFFFFF),
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
-
-        // ── Grid / states ───────────────────────────────────────────────────
-        if (state.loading) {
-            LoadingGrid()
-            return@Column
-        }
-
-        if (state.items.isEmpty() && state.error != null) {
-            ErrorOrEmptyState(
-                title = "Couldn't load browse",
-                subtitle = state.error ?: "Try again.",
-                onAction = { viewModel.loadFirstPage() },
-            )
-            return@Column
-        }
-
-        if (state.items.isEmpty()) {
-            ErrorOrEmptyState(
-                title = "No anime match",
-                subtitle = "Try different filters.",
-                onAction = { showFilters = true },
-            )
-            return@Column
-        }
-
-        LazyVerticalGrid(
-            // Site: minmax(105px, 1fr) phone / 135px sm / 155px md, gap-4.
-            columns = GridCells.Adaptive(if (isTablet) 135.dp else 105.dp),
-            state = gridState,
-            contentPadding = PaddingValues(
-                start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            items(state.items, key = { "${it.id}-${it.displayTitle()}" }) { anime ->
-                BrowseCard(anime = anime, onClick = onAnimeClick)
-            }
-
-            if (state.loadingMore) {
-                item(span = { GridItemSpan(3) }) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(color = theme.action, strokeWidth = 2.dp)
-                    }
-                }
-            } else if (state.pageInfo.hasNextPage) {
-                item(span = { GridItemSpan(3) }) {
-                    // Site: "Load more" — centered pill button, my-5.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 20.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "Load More",
-                            style = WebTextStyles.sm,
-                            color = theme.fgMuted,
-                            fontWeight = FontWeight.Medium,
+                    state.error != null && state.items.isEmpty() -> {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(Color(0x0DFFFFFF))
-                                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(50))
-                                .clickable { viewModel.loadNextPage() }
-                                .padding(horizontal = 24.dp, vertical = 10.dp),
-                        )
+                                .fillMaxWidth()
+                                .padding(top = 64.dp),
+                        ) {
+                            Text(
+                                text = "Couldn't load the catalogue",
+                                style = WebTextStyles.base,
+                                color = theme.fg,
+                            )
+                            Text(
+                                text = state.error ?: "",
+                                style = WebTextStyles.sm,
+                                color = theme.fgMuted,
+                                textAlign = TextAlign.Center,
+                            )
+                            Text(
+                                text = "Retry",
+                                style = WebTextStyles.sm,
+                                color = theme.action,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0x08FFFFFF))
+                                    .clickable { viewModel.load() }
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
                     }
-                    LaTrigger(onTrigger = { viewModel.loadNextPage() })
+                    state.items.isEmpty() -> {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 64.dp),
+                        ) {
+                            Text(
+                                text = "No results",
+                                style = WebTextStyles.base,
+                                color = theme.fg,
+                            )
+                            Text(
+                                text = "Try different filters or clear them.",
+                                style = WebTextStyles.sm,
+                                color = theme.fgMuted,
+                            )
+                        }
+                    }
+                    else -> {
+                        LazyVerticalGrid(
+                            state = gridState,
+                            columns = GridCells.Adaptive(minCard),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                start = 16.dp, end = 16.dp, bottom = 110.dp,
+                            ),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            items(
+                                state.items,
+                                key = { "${it.id}-${it.displayTitle()}" },
+                            ) { anime ->
+                                BrowseCard(anime = anime, onClick = { onAnimeClick(anime) })
+                            }
+                            if (state.loadingMore) {
+                                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(3) }) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = theme.fgMuted,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(24.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        }
-    }
-
-    if (showFilters) {
-        val sheetState = rememberModalBottomSheetState()
-        ModalBottomSheet(
-            onDismissRequest = { showFilters = false },
-            sheetState = sheetState,
-            containerColor = theme.surfaceCard,
-        ) {
-            FilterSheet(
-                current = state.filters,
-                onApply = {
-                    viewModel.applyFilters(it)
-                    showFilters = false
-                },
-            )
         }
     }
 }
 
-/** Site browse card — aspect-2/3 rounded-xl cover, centered title below. */
+// ---------------------------------------------------------------------------
+//  Site card — aspect-2/3 rounded-xl shadow, title below (line-clamp-2).
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun BrowseCard(
-    anime: Anime,
-    onClick: (Anime) -> Unit,
-) {
+private fun BrowseCard(anime: Anime, onClick: () -> Unit) {
     val theme = LocalAnikageTheme.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 20.dp)   // site: mb-6
-            .clickable { onClick(anime) },
+            .padding(bottom = 8.dp)
+            .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
+                .shadow(4.dp, RoundedCornerShape(12.dp), spotColor = Color(0x4D000000))
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color(0x0DFFFFFF)),
         ) {
@@ -318,138 +303,562 @@ private fun BrowseCard(
                 )
             }
         }
-        // Site: line-clamp-2 px-1.5 pt-1.5 text-center text-xs font-medium fg-muted.
+        Spacer(Modifier.height(8.dp))
         Text(
             text = anime.displayTitle(),
             style = WebTextStyles.xs,
-            color = theme.fgMuted,
+            color = theme.fg,
             fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 6.dp),
         )
     }
 }
 
+// ---------------------------------------------------------------------------
+//  Mobile: search bar + filter toggle + reset  (site: lg:hidden row)
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun LaTrigger(onTrigger: () -> Unit) {
-    LaunchedEffect(Unit) { onTrigger() }
+private fun MobileFilterBar(
+    query: String,
+    onQuery: (String) -> Unit,
+    filtersOpen: Boolean,
+    onToggle: () -> Unit,
+    canReset: Boolean,
+    onReset: () -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        // Search input — site: rounded-xl border-white/8 bg-white/5 ps-10.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0x0DFFFFFF))
+                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = theme.fgMuted,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Box(modifier = Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text("Search", style = WebTextStyles.sm, color = Color(0xFF71717A), fontWeight = FontWeight.SemiBold)
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQuery,
+                    singleLine = true,
+                    textStyle = WebTextStyles.sm.copy(color = theme.fg, fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        // Toggle filters — site: bg-white/5 px-3 py-2.5 (Tune icon).
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0x0DFFFFFF))
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Icon(
+                Icons.Default.Tune,
+                contentDescription = "Toggle filters",
+                tint = if (filtersOpen) theme.fg else theme.fgMuted,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        // Reset — site: trash icon, disabled:opacity-50.
+        Icon(
+            Icons.Default.Delete,
+            contentDescription = "Reset filters",
+            tint = if (canReset) Color.White else Color(0x50FFFFFF),
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0x0DFFFFFF))
+                .clickable(enabled = canReset, onClick = onReset)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .size(20.dp),
+        )
+    }
 }
 
 /**
- * Filter sheet — site sections (radio groups): Sort, Season, Format, Status,
- * with the site's radio dots (size-4 round, checked = fg) + text-sm zinc-500
- * labels, inside settings-style cards.
+ * Mobile filter panel — site's expanded state: 2-column grid of selects.
+ * Order: Genres | Sort by · Season | Year · Status | Format · Origin.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FilterSheet(
-    current: BrowseFilters,
-    onApply: (BrowseFilters) -> Unit,
+private fun MobileFilterPanel(
+    filters: BrowseFilters,
+    onChange: (BrowseFilters) -> Unit,
 ) {
-    var filters by remember { mutableStateOf(current) }
-    val theme = LocalAnikageTheme.current
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 24.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FilterSelect(
+                label = "Genres",
+                selected = filters.genres.sorted().joinToString(", ") { genreLabel(it) },
+                options = Genres.map { it to genreLabel(it) },
+                multi = true,
+                checked = { filters.genres.contains(it) },
+                onPick = { value, on ->
+                    val next = if (on) filters.genres + value else filters.genres - value
+                    onChange(filters.copy(genres = next))
+                },
+                modifier = Modifier.weight(1f),
+            )
+            FilterSelect(
+                label = "Sort by",
+                selected = sortLabel(filters.sort),
+                options = SortOptions.map { it.first to it.second },
+                multi = false,
+                checked = { filters.sort == it },
+                onPick = { value, _ -> onChange(filters.copy(sort = value)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FilterSelect(
+                label = "Season",
+                selected = filters.season?.let { seasonLabel(it) } ?: "",
+                options = Seasons.map { it to seasonLabel(it) },
+                multi = false,
+                checked = { filters.season == it },
+                onPick = { value, _ -> onChange(filters.copy(season = value)) },
+                modifier = Modifier.weight(1f),
+            )
+            FilterSelect(
+                label = "Year",
+                selected = filters.year?.toString() ?: "",
+                options = Years.map { it.toString() to it.toString() },
+                multi = false,
+                checked = { filters.year?.toString() == it },
+                onPick = { value, _ -> onChange(filters.copy(year = value.toIntOrNull())) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FilterSelect(
+                label = "Status",
+                selected = filters.statuses.sorted().joinToString(", ") { statusLabel(it) },
+                options = Statuses.map { it to statusLabel(it) },
+                multi = true,
+                checked = { filters.statuses.contains(it) },
+                onPick = { value, on ->
+                    val next = if (on) filters.statuses + value else filters.statuses - value
+                    onChange(filters.copy(statuses = next))
+                },
+                modifier = Modifier.weight(1f),
+            )
+            FilterSelect(
+                label = "Format",
+                selected = filters.formats.sorted().joinToString(", ") { formatLabel(it) },
+                options = Formats.map { it to formatLabel(it) },
+                multi = true,
+                checked = { filters.formats.contains(it) },
+                onPick = { value, on ->
+                    val next = if (on) filters.formats + value else filters.formats - value
+                    onChange(filters.copy(formats = next))
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        FilterSelect(
+            label = "Origin",
+            selected = filters.origin?.let { originLabel(it) } ?: "",
+            options = Origins.map { it to originLabel(it) },
+            multi = false,
+            checked = { filters.origin == it },
+            onPick = { value, _ -> onChange(filters.copy(origin = value)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Desktop: top filter row + left accordion sidebar
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun DesktopFilterRow(
+    filters: BrowseFilters,
+    onChange: (BrowseFilters) -> Unit,
+    onReset: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        // Search — site: label "Search" (title-subsec) + input flex-1.
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Search", style = WebTextStyles.sm, color = LocalAnikageTheme.current.fg, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp))
+            SiteSearchInput(filters.query) { onChange(filters.copy(query = it)) }
+        }
+        Column(modifier = Modifier.width(180.dp)) {
+            Text("Genres", style = WebTextStyles.sm, color = LocalAnikageTheme.current.fg, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp))
+            FilterSelect(
+                label = "",
+                selected = filters.genres.sorted().joinToString(", ") { genreLabel(it) },
+                options = Genres.map { it to genreLabel(it) },
+                multi = true,
+                checked = { filters.genres.contains(it) },
+                onPick = { value, on ->
+                    val next = if (on) filters.genres + value else filters.genres - value
+                    onChange(filters.copy(genres = next))
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Column(modifier = Modifier.width(180.dp)) {
+            Text("Sort by", style = WebTextStyles.sm, color = LocalAnikageTheme.current.fg, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp))
+            FilterSelect(
+                label = "",
+                selected = sortLabel(filters.sort),
+                options = SortOptions.map { it.first to it.second },
+                multi = false,
+                checked = { filters.sort == it },
+                onPick = { value, _ -> onChange(filters.copy(sort = value)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Column(modifier = Modifier.width(150.dp)) {
+            Text("Year", style = WebTextStyles.sm, color = LocalAnikageTheme.current.fg, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp))
+            FilterSelect(
+                label = "",
+                selected = filters.year?.toString() ?: "",
+                options = Years.map { it.toString() to it.toString() },
+                multi = false,
+                checked = { filters.year?.toString() == it },
+                onPick = { value, _ -> onChange(filters.copy(year = value.toIntOrNull())) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        // Reset — site: self-end trash button.
+        Icon(
+            Icons.Default.Delete,
+            contentDescription = "Reset filters",
+            tint = if (!filters.isDefault) Color.White else Color(0x50FFFFFF),
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0x0DFFFFFF))
+                .clickable(enabled = !filters.isDefault, onClick = onReset)
+                .padding(horizontal = 14.dp, vertical = 11.dp)
+                .size(20.dp),
+        )
+    }
+}
+
+/** Desktop sidebar — site: hidden lg:flex min-w-[200px] flex-col gap-4 accordions. */
+@Composable
+private fun DesktopFilterSidebar(
+    filters: BrowseFilters,
+    onChange: (BrowseFilters) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.padding(start = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(
-            text = "Filters",
-            style = WebTextStyles.titleSection,
-            color = theme.fg,
-            modifier = Modifier.padding(horizontal = 16.dp),
+        RadioAccordion(
+            title = "Season",
+            initiallyOpen = true,          // site: Season accordion open by default
+            options = Seasons.map { it to seasonLabel(it) },
+            selected = filters.season,
+            onSelect = { onChange(filters.copy(season = it)) },
         )
-
-        FilterGroup(title = "Sort") {
-            SortOptions(
-                selected = filters.sort,
-                onSelect = { filters = filters.copy(sort = it) },
-            )
-        }
-        FilterGroup(title = "Season") {
-            listOf(null to "Any", "WINTER" to "Winter", "SPRING" to "Spring", "SUMMER" to "Summer", "FALL" to "Fall").forEach { (value, label) ->
-                RadioRow(
-                    label = label,
-                    selected = filters.season == value,
-                    onClick = { filters = filters.copy(season = value) },
-                )
-            }
-        }
-        FilterGroup(title = "Format") {
-            listOf(null to "Any", "TV" to "TV", "TV_SHORT" to "TV Short", "MOVIE" to "Movie", "SPECIAL" to "Special", "OVA" to "OVA", "ONA" to "ONA").forEach { (value, label) ->
-                RadioRow(
-                    label = label,
-                    selected = filters.format == value,
-                    onClick = { filters = filters.copy(format = value) },
-                )
-            }
-        }
-        FilterGroup(title = "Status") {
-            listOf(null to "Any", "RELEASING" to "Releasing", "FINISHED" to "Finished", "NOT_YET_RELEASED" to "Not Yet Released", "CANCELLED" to "Cancelled").forEach { (value, label) ->
-                RadioRow(
-                    label = label,
-                    selected = filters.status == value,
-                    onClick = { filters = filters.copy(status = value) },
-                )
-            }
-        }
-
-        // Apply — site primary button style (white/action).
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(theme.action)
-                .clickable { onApply(filters) }
-                .padding(vertical = 12.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "Apply filters",
-                style = WebTextStyles.sm,
-                color = theme.actionFg,
-                fontWeight = FontWeight.Medium,
-            )
-        }
+        RadioAccordion(
+            title = "Format",
+            initiallyOpen = false,
+            options = Formats.map { it to formatLabel(it) },
+            selected = null,               // multi-select on the site
+            multiOptions = formatsChecked(filters),
+            onMultiToggle = { value, on ->
+                val next = if (on) filters.formats + value else filters.formats - value
+                onChange(filters.copy(formats = next))
+            },
+            selectedCount = filters.formats.size,
+            onSelect = {},
+        )
+        RadioAccordion(
+            title = "Status",
+            initiallyOpen = false,
+            options = Statuses.map { it to statusLabel(it) },
+            selected = null,
+            multiOptions = statusesChecked(filters),
+            onMultiToggle = { value, on ->
+                val next = if (on) filters.statuses + value else filters.statuses - value
+                onChange(filters.copy(statuses = next))
+            },
+            selectedCount = filters.statuses.size,
+            onSelect = {},
+        )
+        RadioAccordion(
+            title = "Origin",
+            initiallyOpen = false,
+            options = Origins.map { it to originLabel(it) },
+            selected = filters.origin,
+            onSelect = { onChange(filters.copy(origin = it)) },
+        )
     }
 }
 
+private fun formatsChecked(filters: BrowseFilters): Map<String, Boolean> =
+    Formats.associateWith { filters.formats.contains(it) }
+
+private fun statusesChecked(filters: BrowseFilters): Map<String, Boolean> =
+    Statuses.associateWith { filters.statuses.contains(it) }
+
+/** Site accordion item: rounded-xl border-white/6 bg-white/3 px-4 py-2. */
 @Composable
-private fun FilterGroup(title: String, content: @Composable () -> Unit) {
+private fun RadioAccordion(
+    title: String,
+    initiallyOpen: Boolean,
+    options: List<Pair<String, String>>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+    multiOptions: Map<String, Boolean> = emptyMap(),
+    onMultiToggle: (String, Boolean) -> Unit = { _, _ -> },
+    selectedCount: Int = 0,
+) {
+    var open by remember { mutableStateOf(initiallyOpen) }
     val theme = LocalAnikageTheme.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(Color(0x08FFFFFF))
-            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp)),
     ) {
-        Text(
-            text = title.uppercase(),
-            style = WebTextStyles.xs2,
-            color = Color(0x66FFFFFF),
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.sp,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { open = !open }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
+            Text(
+                text = title + if (selectedCount > 0) " ($selectedCount)" else "",
+                style = WebTextStyles.lg,
+                fontSize = 17.sp,
+                color = theme.fg,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Icon(
+                Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = theme.fg,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        AnimatedVisibility(visible = open, enter = expandVertically(), exit = shrinkVertically()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // "Any" row (site's radio groups include a clear/Any option).
+                RadioRow(
+                    label = "Any",
+                    checked = selected == null && selectedCount == 0,
+                    onToggle = { if (selected != null || selectedCount > 0) onSelect(null) },
+                )
+                options.forEach { (value, label) ->
+                    val checked = if (multiOptions.isNotEmpty()) {
+                        multiOptions[value] == true
+                    } else {
+                        selected == value
+                    }
+                    RadioRow(
+                        label = label,
+                        checked = checked,
+                        onToggle = {
+                            if (multiOptions.isNotEmpty()) onMultiToggle(value, !checked)
+                            else onSelect(if (checked) null else value)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Site radio row: size-4 rounded-full border; label text-sm medium zinc-500. */
+@Composable
+private fun RadioRow(label: String, checked: Boolean, onToggle: () -> Unit) {
+    val theme = LocalAnikageTheme.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(16.dp)
+                .clip(CircleShape)
+                .background(if (checked) theme.fg else Color.Transparent)
+                .border(
+                    width = if (checked) 5.dp else 1.dp,
+                    color = if (checked) theme.fg else Color(0x33FFFFFF),
+                    shape = CircleShape,
+                ),
         )
-        content()
+        Text(
+            text = label,
+            style = WebTextStyles.sm,
+            color = if (checked) theme.fg else Color(0xFF71717A),
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Shared controls
+// ---------------------------------------------------------------------------
+
+/** Site search input (desktop, labelled variant uses the same box). */
+@Composable
+private fun SiteSearchInput(value: String, onValueChange: (String) -> Unit) {
+    val theme = LocalAnikageTheme.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x0DFFFFFF))
+            .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Icon(
+            Icons.Default.Search,
+            contentDescription = null,
+            tint = theme.fgMuted,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(modifier = Modifier.weight(1f)) {
+            if (value.isEmpty()) {
+                Text("Search", style = WebTextStyles.sm, color = Color(0xFF71717A))
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = WebTextStyles.sm.copy(color = theme.fg),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
+ * Site select — button: flex w-full justify-between rounded-xl
+ * border-white/8 bg-white/5 px-3 py-2.5 text-sm text-zinc-500 +
+ * chevrons-up-down icon; opens a dropdown menu (site: listbox popover).
+ */
+@Composable
+private fun FilterSelect(
+    label: String,
+    selected: String,
+    options: List<Pair<String, String>>,
+    multi: Boolean,
+    checked: (String) -> Boolean,
+    onPick: (String, Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val theme = LocalAnikageTheme.current
+    var open by remember { mutableStateOf(false) }
+    val display = selected.ifBlank { "Any" }
+
+    Column(modifier = modifier) {
+        if (label.isNotBlank()) {
+            Text(
+                text = label,
+                style = WebTextStyles.sm,
+                color = theme.fg,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
+        Box {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x0DFFFFFF))
+                    .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp))
+                    .clickable { open = true }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Text(
+                    text = display,
+                    style = WebTextStyles.sm,
+                    color = if (selected.isBlank()) Color(0xFF71717A) else theme.fg,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = Color(0xFF71717A),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            androidx.compose.material3.DropdownMenu(
+                expanded = open,
+                onDismissRequest = { open = false },
+                modifier = Modifier
+                    .background(Color(0xFF151515))
+                    .width(220.dp),
+            ) {
+                // Clear option.
+                DropdownRow(
+                    label = "Any",
+                    checked = selected.isBlank(),
+                ) { onPick("", true); open = false }
+                options.forEach { (value, optionLabel) ->
+                    DropdownRow(
+                        label = optionLabel,
+                        checked = checked(value),
+                    ) {
+                        onPick(value, !checked(value))
+                        if (!multi) open = false
+                    }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun RadioRow(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
+private fun DropdownRow(label: String, checked: Boolean, onClick: () -> Unit) {
     val theme = LocalAnikageTheme.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -457,53 +866,74 @@ private fun RadioRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 2.dp),
+            .padding(horizontal = 14.dp, vertical = 9.dp),
     ) {
-        // Site radio: size-4 round border, checked = filled fg dot.
         Box(
             modifier = Modifier
                 .size(16.dp)
                 .clip(CircleShape)
-                .background(Color(0x14FFFFFF))
+                .background(if (checked) theme.fg else Color.Transparent)
                 .border(
-                    1.dp,
-                    if (selected) theme.fg else Color(0x33FFFFFF),
-                    CircleShape,
+                    width = if (checked) 5.dp else 1.dp,
+                    color = if (checked) theme.fg else Color(0x33FFFFFF),
+                    shape = CircleShape,
                 ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (selected) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(theme.fg)
-                )
-            }
-        }
+        )
         Text(
             text = label,
             style = WebTextStyles.sm,
-            color = if (selected) theme.fg else Color(0xFF71717A),
-            fontWeight = FontWeight.Medium,
+            color = if (checked) theme.fg else Color(0xFFA1A1AA),
         )
+        if (checked) {
+            Spacer(Modifier.weight(1f))
+            Icon(Icons.Default.Check, contentDescription = null, tint = theme.fg, modifier = Modifier.size(14.dp))
+        }
     }
 }
 
-@Composable
-private fun SortOptions(selected: String, onSelect: (String) -> Unit) {
-    listOf(
-        "POPULARITY_DESC" to "Popularity",
-        "TRENDING_DESC" to "Trending",
-        "SCORE_DESC" to "Top rated",
-        "FAVOURITES_DESC" to "Favourites",
-        "START_DATE_DESC" to "Newest",
-        "TITLE_ROMAJI_ASC" to "A–Z",
-    ).forEach { (value, label) ->
-        RadioRow(
-            label = label,
-            selected = selected == value,
-            onClick = { onSelect(value) },
-        )
-    }
+// ---------------------------------------------------------------------------
+//  Filter option data — site values (API enums) + display labels
+// ---------------------------------------------------------------------------
+
+private val SortOptions = listOf(
+    "popularity" to "Popularity",
+    "trending" to "Trending",
+    "score" to "Score",
+    "favourites" to "Favourites",
+    "newest" to "Newest",
+)
+
+private val Seasons = listOf("WINTER", "SPRING", "SUMMER", "FALL")
+private fun seasonLabel(v: String) = when (v) {
+    "WINTER" -> "Winter"; "SPRING" -> "Spring"; "SUMMER" -> "Summer"; else -> "Fall"
 }
+
+private val Formats = listOf("TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA")
+private fun formatLabel(v: String) = when (v) {
+    "TV" -> "TV"; "TV_SHORT" -> "TV Short"; "MOVIE" -> "Movie"; "SPECIAL" -> "Special"
+    "OVA" -> "OVA"; else -> "ONA"
+}
+
+private val Statuses = listOf("FINISHED", "RELEASING", "NOT_YET_RELEASED", "CANCELLED")
+private fun statusLabel(v: String) = when (v) {
+    "FINISHED" -> "Finished"; "RELEASING" -> "Releasing"
+    "NOT_YET_RELEASED" -> "Not Yet Released"; else -> "Cancelled"
+}
+
+private val Origins = listOf("JP", "KR", "CN", "TW")
+private fun originLabel(v: String) = when (v) {
+    "JP" -> "Japan"; "KR" -> "South Korea"; "CN" -> "China"; else -> "Taiwan"
+}
+
+private val Genres = listOf(
+    "Action", "Adventure", "Comedy", "Drama", "Ecchi", "Fantasy",
+    "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery", "Psychological",
+    "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller",
+)
+private fun genreLabel(v: String) = when (v) {
+    "Mahou Shoujo" -> "Mahou Shoujo"; "Sci-Fi" -> "Sci-Fi"; else -> v
+}
+
+private val Years = (java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) + 1) downTo 1960
+
+private fun sortLabel(v: String) = SortOptions.firstOrNull { it.first == v }?.second ?: "Popularity"

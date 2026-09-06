@@ -72,8 +72,11 @@ class DetailsViewModel(
             ?: return
         repo.anikageEpisodes(slug).onSuccess { eps ->
             if (eps.isNotEmpty()) {
+                // Guard: duplicate episode numbers would collide as lazy-list
+                // keys, so dedupe by number (API may return recaps/specials).
+                val distinct = eps.distinctBy { it.number }
                 _state.value = _state.value.copy(
-                    episodes = eps.map { ep ->
+                    episodes = distinct.map { ep ->
                         EpisodeUi(
                             number = ep.number,
                             title = ep.title?.takeIf { it.isNotBlank() } ?: "Episode ${ep.number}",
@@ -88,7 +91,7 @@ class DetailsViewModel(
                 )
                 AppLogger.i(
                     LogCategory.DATA,
-                    "Loaded ${eps.size} real episodes for slug $slug (animeId=$animeId)",
+                    "Loaded ${distinct.size} real episodes for slug $slug (animeId=$animeId)",
                 )
             }
         }

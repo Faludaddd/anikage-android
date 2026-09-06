@@ -109,8 +109,14 @@ class AnikageApi(
     // ---------------------------------------------------------------------
 
     /**
-     * Browse or search the Anikage catalogue. `sort` is one of
-     * popularity|trending|score|favourites (site default: popularity).
+     * Browse or search the Anikage catalogue — the exact endpoint + params
+     * the site's Browse page uses. `sort` is one of
+     * popularity|trending|score|favourites|newest (site default: popularity).
+     * Filter values mirror the site's filter panel:
+     *   season: WINTER|SPRING|SUMMER|FALL     year: e.g. 2025
+     *   format: TV|TV_SHORT|MOVIE|SPECIAL|OVA|ONA (comma-joined when multiple)
+     *   status: FINISHED|RELEASING|NOT_YET_RELEASED|CANCELLED (multi)
+     *   country: JP|KR|CN|TW                  genres: comma-joined
      */
     suspend fun browse(
         query: String? = null,
@@ -118,6 +124,11 @@ class AnikageApi(
         page: Int = 1,
         limit: Int = 24,
         genres: String? = null,
+        season: String? = null,
+        year: Int? = null,
+        format: String? = null,
+        status: String? = null,
+        country: String? = null,
         type: String? = "anime",
         adult: Boolean = true,
     ): AnikageBrowseResponse {
@@ -127,6 +138,11 @@ class AnikageApi(
             param("page", page.toString())
             param("limit", limit.toString())
             param("genres", genres)
+            param("season", season)
+            param("year", year?.toString())
+            param("format", format)
+            param("status", status)
+            param("country", country)
             param("type", type)
             param("adult", adult.toString())
         }

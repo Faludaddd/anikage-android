@@ -35,7 +35,10 @@ class ScheduleViewModel(
             val result = repo.scheduleWeek()
             result.fold(
                 onSuccess = { items ->
-                    val grouped = groupByDay(items)
+                    // Dedupe by id — the same airing entry can appear on
+                    // adjacent days; lazy-list keys must stay unique.
+                    val distinct = items.distinctBy { it.id }
+                    val grouped = groupByDay(distinct)
                     _state.value = ScheduleUiState(byDay = grouped, loading = false)
                 },
                 onFailure = { e ->

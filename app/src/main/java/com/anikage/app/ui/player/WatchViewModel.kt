@@ -32,6 +32,14 @@ data class EpisodeItem(
     val isRecap: Boolean = false,
 )
 
+/** A subtitle track from the sources response (token -> proxy URL). */
+data class SubtitleTrack(
+    val label: String,
+    val url: String,
+    val language: String,
+    val isDefault: Boolean,
+)
+
 data class CommentsUiState(
     val loading: Boolean = false,
     val comments: List<AnikageComment> = emptyList(),
@@ -45,6 +53,8 @@ data class WatchUiState(
     val totalEpisodes: Int = 1,
     val episodes: List<EpisodeItem> = emptyList(),
     val streamUrl: String? = null,
+    val subtitles: List<SubtitleTrack> = emptyList(),
+    val qualityOptions: List<String> = emptyList(),
     val streamLoading: Boolean = false,
     val streamError: String? = null,
     val error: String? = null,
@@ -92,7 +102,24 @@ class WatchViewModel(
     fun player(): ExoPlayer = player ?: buildPlayer().also {
         player = it
         it.repeatMode = Player.REPEAT_MODE_OFF
-        it.playWhenReady = Config.Player.AUTO_PLAY
+        // Settings-gated playback behaviour (site: autoplay/autonext/volume).
+        it.playWhenReady = com.anikage.app.core.settings.SettingsState.autoplay
+        it.volume = com.anikage.app.core.settings.SettingsState.volume *
+            if (com.anikage.app.core.settings.SettingsState.muted) 0f else 1f
+        // Autonext — site: auto-play the next episode when this one ends.
+        it.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED &&
+                    com.anikage.app.core.settings.SettingsState.autonext
+                ) {
+                    val next = _state.value.episode + 1
+                    if (next <= _state.value.totalEpisodes) {
+                        AppLogger.i(LogCategory.PLAYER, "Autonext -> episode $next")
+                        switchEpisode(next)
+                    }
+                }
+            }
+        })
     }
 
     private fun buildPlayer(): ExoPlayer {
@@ -151,8 +178,10 @@ class WatchViewModel(
                         _state.value = _state.value.copy(slug = slug)
                         repo.anikageEpisodes(slug).onSuccess { eps ->
                             if (eps.isNotEmpty()) {
+                                // Dedupe by number — lazy-list keys must be unique.
+                                val distinct = eps.distinctBy { it.number }
                                 _state.value = _state.value.copy(
-                                    episodes = eps.map {
+                                    episodes = distinct.map {
                                         EpisodeItem(
                                             number = it.number,
                                             title = it.title?.takeIf { t -> t.isNotBlank() } ?: "Episode ${it.number}",
@@ -161,7 +190,7 @@ class WatchViewModel(
                                             isRecap = it.isRecap,
                                         )
                                     },
-                                    totalEpisodes = maxOf(total, eps.size),
+                                    totalEpisodes = maxOf(total, distinct.size),
                                 )
                             }
                         }
@@ -184,24 +213,52 @@ class WatchViewModel(
         viewModelScope.launch {
             _state.value = _state.value.copy(streamLoading = true, streamError = null)
             val slug = _state.value.slug
-            val streamUrl: String? = if (slug != null) {
-                repo.anikageStreamUrl(slug, episode, _state.value.streamServer.lowercase(), _state.value.streamLang)
+            val settings = com.anikage.app.core.settings.SettingsState
+            var streamUrl: String? = null
+            var subtitles: List<SubtitleTrack> = emptyList()
+            if (slug != null) {
+                repo.anikageSources(slug, episode, _state.value.streamServer.lowercase(), _state.value.streamLang)
+                    .onSuccess { response ->
+                        val best = response.sources.firstOrNull { it.isM3U8 } ?: response.sources.firstOrNull()
+                        streamUrl = best?.url?.let { token ->
+                            // Token -> https://og.bakayaro.live/m3u8/{token} (the
+                            // exact URL the site's player builds; the data source
+                            // attaches the Origin header the proxy requires).
+                            if (token.startsWith("http")) token
+                            else "${Config.ANIKAGE_STREAM_PROXY_BASE_URL ?: "https://og.bakayaro.live"}/m3u8/$token"
+                        }
+                        subtitles = response.subtitles.map { sub ->
+                            SubtitleTrack(
+                                label = sub.label ?: "",
+                                url = sub.file?.let { t ->
+                                    if (t.startsWith("http")) t
+                                    else "${Config.ANIKAGE_STREAM_PROXY_BASE_URL ?: "https://og.bakayaro.live"}/stream/$t"
+                                } ?: "",
+                                language = sub.label ?: "",
+                                isDefault = sub.default,
+                            )
+                        }.filter { it.url.isNotBlank() }
+                        if (streamUrl == null) {
+                            AppLogger.w(LogCategory.PLAYER, "No stream sources for $slug ep $episode")
+                        } else {
+                            AppLogger.i(
+                                LogCategory.PLAYER,
+                                "Stream ready for episode $episode (${subtitles.size} subtitle track(s))",
+                            )
+                        }
+                    }
+                    .onFailure { e ->
+                        AppLogger.w(LogCategory.PLAYER, "Sources failed for $slug ep $episode", e)
+                    }
             } else {
                 AppLogger.w(LogCategory.PLAYER, "No Anikage slug — stream unavailable")
-                null
-            }
-            if (streamUrl == null) {
-                AppLogger.w(LogCategory.PLAYER, "No stream source resolved")
-            } else {
-                AppLogger.i(LogCategory.PLAYER, "Stream ready for episode $episode")
             }
 
-            val saved = if (Config.Player.RESUME_FROM_POSITION)
-                repo.loadProgress(animeId, episode)?.positionMs ?: 0L
-            else 0L
+            val saved = repo.loadProgress(animeId, episode)?.positionMs ?: 0L
 
             _state.value = _state.value.copy(
                 streamUrl = streamUrl,
+                subtitles = subtitles,
                 savedPositionMs = saved,
                 streamLoading = false,
                 streamError = if (streamUrl == null) "No playable source was returned for this episode." else null,
@@ -225,7 +282,7 @@ class WatchViewModel(
             }
             loadComments(episode)
 
-            if (!Config.Player.INCOGNITO) {
+            if (!com.anikage.app.core.settings.SettingsState.incognito) {
                 repo.markRecentlyViewed(
                     com.anikage.app.core.data.model.Anime(
                         id = animeId,
@@ -239,25 +296,54 @@ class WatchViewModel(
         }
     }
 
-    /** Set the media item on the (already-created) player and start it. */
+    /** Set the media item (with subtitle tracks + quality caps) and start it. */
     private fun preparePlayer(episode: Int) {
         val url = _state.value.streamUrl ?: return
         val player = player()
-        val media = MediaItem.Builder()
+
+        val builder = MediaItem.Builder()
             .setUri(url)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle("${_state.value.title} — Episode $episode")
                     .build()
             )
-            .build()
-        player.setMediaItem(media)
+        // Side-load subtitle tracks (site's softsub VTT files via the proxy).
+        if (_state.value.subtitles.isNotEmpty()) {
+            builder.setSubtitleConfigurations(
+                _state.value.subtitles.map { sub ->
+                    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(sub.url))
+                        .setMimeType(androidx.media3.common.MimeTypes.TEXT_VTT)
+                        .setLanguage(sub.language)
+                        .setLabel(sub.label)
+                        .setSelectionFlags(
+                            if (sub.isDefault) androidx.media3.common.C.SELECTION_FLAG_DEFAULT else 0
+                        )
+                        .build()
+                }
+            )
+        }
+        player.setMediaItem(builder.build())
+
+        // Quality cap (site: streamQuality setting) via track selection.
+        runCatching {
+            val quality = com.anikage.app.core.settings.SettingsState.streamQuality
+            val params = player.trackSelectionParameters.buildUpon()
+            when (quality) {
+                "low" -> params.setMaxVideoSize(480, 854)
+                "standard" -> params.setMaxVideoSize(720, 1280)
+                "full" -> params.setMaxVideoSize(1080, 1920)
+                else -> params/* auto: no cap */
+            }
+            player.trackSelectionParameters = params.build()
+        }
+
         if (_state.value.savedPositionMs > 0L) {
             player.seekTo(_state.value.savedPositionMs)
             AppLogger.d(LogCategory.PLAYER, "Resuming from saved position ${_state.value.savedPositionMs / 1000}s")
         }
         player.prepare()
-        if (Config.Player.AUTO_PLAY) player.play()
+        if (com.anikage.app.core.settings.SettingsState.autoplay) player.play()
     }
 
     /**
@@ -298,7 +384,7 @@ class WatchViewModel(
     }
 
     private fun loadComments(episode: Int) {
-        if (!Config.Player.COMMENTS_ENABLED) return
+        if (!com.anikage.app.core.settings.SettingsState.commentsEnabled) return
         viewModelScope.launch {
             _state.value = _state.value.copy(
                 comments = _state.value.comments.copy(loading = true),

@@ -7,7 +7,6 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.util.Log
-import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,26 +43,23 @@ data class LogEntry(
 /**
  * In-app logger with a bounded ring buffer, exposed to the UI as a
  * [StateFlow] so the Logger screen updates live. Every entry is also
- * mirrored to logcat (tag "Anikage") so `adb logcat` shows the same
- * stream.
+ * mirrored to logcat (tag "Anikage") AND persisted to the current
+ * session file by [SessionLogger] — so logs survive crashes and each
+ * app start opens a separate, never-overwritten session.
  *
- * All app subsystems log through this object; the Logger screen in
- * Settings is the diagnostics surface (search, filter, export, etc.).
- * This replaces the need for a separate debug build: the production
- * build carries the same diagnostics.
+ * All app subsystems log through this object; the Diagnostics screen in
+ * Settings is the surface for browsing sessions, searching, filtering,
+ * exporting, and reading crash traces.
  */
 object AppLogger {
 
     private const val MAX_ENTRIES = 2000
     private const val PREFS_NAME = "anikage_logger"
     private const val KEY_VERBOSE = "verbose_enabled"
-    private const val CRASH_FILE = "last_crash.txt"
-    private const val CRASH_FILE_MAX_CHARS = 8000
 
     private val lock = Any()
     private val buffer = ArrayDeque<LogEntry>()
     private var nextId = 0L
-    private var crashFile: File? = null
 
     private val _entries = MutableStateFlow<List<LogEntry>>(emptyList())
     val entries: StateFlow<List<LogEntry>> = _entries.asStateFlow()
@@ -78,24 +74,32 @@ object AppLogger {
         val prefs: SharedPreferences =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         verboseEnabled = prefs.getBoolean(KEY_VERBOSE, false)
-        crashFile = File(context.filesDir, CRASH_FILE)
+        // Open a new persistent session (and finalise the previous one).
+        SessionLogger.startSession(
+            context,
+            versionName(context),
+            versionCode(context),
+        )
         installCrashHandler()
         log(
             LogLevel.INFO, LogCategory.APP,
             "Logger initialised — verbose=${verboseEnabled}",
         )
-        // Surface the previous session's crash (if any) so it is visible
-        // in the Logger screen after the app restarts.
-        crashFile?.let { file ->
-            if (file.exists()) {
-                runCatching {
-                    val content = file.readText().take(CRASH_FILE_MAX_CHARS)
-                    log(LogLevel.ERROR, LogCategory.SYSTEM, "Previous session crashed:\n$content")
-                    file.delete()
-                }
-            }
-        }
+        log(
+            LogLevel.INFO, LogCategory.APP,
+            "Session #${SessionLogger.allSessions().firstOrNull()?.seq ?: "?"} started " +
+                "(previous session: ${SessionLogger.previousCrash?.let { "CRASHED — ${it.errorCount} errors" } ?: "clean"})",
+        )
     }
+
+    private fun versionName(context: Context): String =
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?" }.getOrDefault("?")
+
+    private fun versionCode(context: Context): Long =
+        runCatching {
+            val pm = context.packageManager.getPackageInfo(context.packageName, 0)
+            if (Build.VERSION.SDK_INT >= 28) pm.longVersionCode else pm.versionCode.toLong()
+        }.getOrDefault(0L)
 
     fun setVerbose(enabled: Boolean, context: Context) {
         verboseEnabled = enabled
@@ -124,6 +128,8 @@ object AppLogger {
             while (buffer.size > MAX_ENTRIES) buffer.removeFirst()
             _entries.value = buffer.toList()
         }
+        // Persist to the session file (crash-safe, background flush).
+        SessionLogger.append(entry)
         runCatching {
             Log.println(
                 level.priority,
@@ -216,23 +222,36 @@ object AppLogger {
     }
 
     /**
-     * Best-effort crash capture: writes the stack trace to disk, then the
-     * default handler takes over (process still dies normally). The next
-     * [init] re-logs it so crashes are visible in the Logger screen.
+     * Crash capture: the stack trace is persisted SYNCHRONOUSLY by
+     * [SessionLogger.recordCrash] (so it survives the process death), an
+     * ERROR entry is best-effort logged, then the default handler runs.
      */
     private fun installCrashHandler() {
         val current = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching { SessionLogger.recordCrash(throwable) }
             runCatching {
-                crashFile?.writeText(
-                    buildString {
-                        append("Time: ").append(java.util.Date()).append('\n')
-                        append("Thread: ").append(thread.name).append('\n')
-                        append(Log.getStackTraceString(throwable))
-                    },
+                Log.e(
+                    "Anikage/SYSTEM",
+                    "CRASH: ${throwable.javaClass.simpleName}: ${throwable.message}\n" +
+                        Log.getStackTraceString(throwable),
                 )
             }
             current?.uncaughtException(thread, throwable)
         }
     }
+
+    /** Clean-shutdown marker — call from MainActivity.onDestroy(isFinishing). */
+    fun markSessionCompleted() {
+        runCatching { SessionLogger.markCompleted() }
+    }
+
+    /** Periodic heartbeat — call from MainActivity every ~30s. */
+    fun heartbeat() {
+        runCatching { SessionLogger.heartbeat() }
+    }
+
+    /** The previous session's crash info (null when it shut down cleanly). */
+    val previousCrash: SessionLogger.SessionMeta?
+        get() = SessionLogger.previousCrash
 }
