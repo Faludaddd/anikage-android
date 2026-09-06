@@ -1,12 +1,5 @@
 package com.anikage.app.ui.components
 
-import android.content.Intent
-import android.net.Uri
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -14,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,25 +19,34 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.anikage.app.R
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
@@ -57,13 +60,14 @@ import com.anikage.app.core.theme.WebTextStyles
  *   LEFT  pill: rounded-full border-white/10 bg-surface/90 p-1 shadow-sm
  *          (md: bg-surface/70 + backdrop-blur-xl),
  *          logo img (h-5, mx-3 my-1.5, lg:mx-5) + nav links (lg only:
- *          Home/Browse/Schedule/Music/Torrents, px-5 py-2 text-base medium)
+ *          Home/Browse/Schedule/Music/Torrents) — compact, professional
+ *          sizing like the site's text-base links.
  *   RIGHT icons (gap-1.5 md:gap-2.5):
- *          Discord (md+ only, h-12 w-12, external link),
  *          Search  (h-11 w-11, md: h-12 w-12, lucide-search),
  *          Bell    (h-11 w-11, md: h-12 w-12),
- *          Profile (avatar h-11 w-11 md:h-12 w-12; logged-out default avatar
- *                   has animate-pulse opacity-70 — reproduced here).
+ *          Profile (avatar h-11 w-11 md:h-12 w-12; opens a dropdown menu —
+ *                   the site's button is aria-haspopup — never a direct
+ *                   auth page).
  */
 @Composable
 fun FloatingTopBar(
@@ -71,14 +75,11 @@ fun FloatingTopBar(
     onNavigate: (String) -> Unit,
     onSearchClick: () -> Unit = { onNavigate("search") },
     onNotificationsClick: () -> Unit = { onNavigate("notifications") },
-    onProfileClick: () -> Unit = { onNavigate("profile") },
     modifier: Modifier = Modifier,
 ) {
     val configuration = LocalConfiguration.current
     val isWideScreen = configuration.screenWidthDp.dp >= 840.dp   // site lg
-    val isMd = configuration.screenWidthDp.dp >= 600.dp           // site md (Discord shows)
     val theme = LocalAnikageTheme.current
-    val context = LocalContext.current
 
     Box(
         modifier = modifier
@@ -98,24 +99,24 @@ fun FloatingTopBar(
                     .clip(RoundedCornerShape(50))
                     .background(theme.surface.copy(alpha = 0.90f))
                     .border(BorderStroke(1.dp, Color(0x1AFFFFFF)), RoundedCornerShape(50))
-                    .padding(4.dp),                                   // site: p-1
+                    .padding(3.dp),                                  // compact: p-0.75
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Logo — site: h-5 (20px) w-auto min-w-[60px], mx-3 my-1.5.
+                    // Logo — site: h-5 (20px) w-auto, mx-3 my-1.5.
                     Image(
                         painter = painterResource(id = R.drawable.anikage_logo),
                         contentDescription = "Anikage logo",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .padding(horizontal = 12.dp, vertical = 5.dp)
                             .height(20.dp)
                             .clickable { onNavigate("home") },
                     )
                     if (isWideScreen) {
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(end = 8.dp),
+                            modifier = Modifier.padding(end = 6.dp),
                         ) {
                             navItems().forEach { item ->
                                 NavTabPill(
@@ -131,26 +132,11 @@ fun FloatingTopBar(
 
             Spacer(Modifier.width(8.dp))
 
-            // RIGHT: round icon buttons (site order: Discord, Search, Bell, Avatar).
+            // RIGHT: round icon buttons (site order: Search, Bell, Avatar).
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Discord — site: md+ only, external invite link.
-                if (isMd) {
-                    RoundIconButton(
-                        icon = null,
-                        discord = true,
-                        contentDescription = "Discord",
-                        onClick = {
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://discord.gg/qmrbA5WDdV")),
-                                )
-                            }
-                        },
-                    )
-                }
                 RoundIconButton(
                     icon = Icons.Default.Search,
                     contentDescription = "Search",
@@ -161,15 +147,17 @@ fun FloatingTopBar(
                     contentDescription = "Notifications",
                     onClick = onNotificationsClick,
                 )
-                // Profile avatar — site: default avatar image, animate-pulse
-                // opacity-70 while logged out; opens the profile area.
-                ProfileAvatarButton(onClick = onProfileClick)
+                // Profile avatar — opens a dropdown menu (site: aria-haspopup
+                // button), NOT a navigation to an auth page.
+                ProfileAvatarMenu(
+                    onNavigate = onNavigate,
+                )
             }
         }
     }
 }
 
-/** site nav link: rounded-full px-5 py-2 text-base font-medium. */
+/** site nav link: rounded-full px-4 py-1.5 text-sm font-medium — compact. */
 @Composable
 private fun NavTabPill(
     label: String,
@@ -181,11 +169,13 @@ private fun NavTabPill(
             .clip(RoundedCornerShape(50))
             .background(if (isSelected) Color(0x26FFFFFF) else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
         Text(
             text = label,
-            style = WebTextStyles.base,
+            // Fixed compact size (NOT the tablet-scaled type) so the nav pill
+            // stays tight like the site's text-base links on large screens.
+            fontSize = 14.sp,
             color = if (isSelected) Color.White else LocalAnikageTheme.current.fgMuted,
             fontWeight = FontWeight.Medium,
         )
@@ -195,10 +185,9 @@ private fun NavTabPill(
 /** site: h-11 w-11 (md: h-12 w-12) rounded-full border-white/10 bg-surface/90 shadow-sm. */
 @Composable
 private fun RoundIconButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
-    discord: Boolean = false,
 ) {
     val theme = LocalAnikageTheme.current
     val configuration = LocalConfiguration.current
@@ -213,62 +202,169 @@ private fun RoundIconButton(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        if (discord) {
-            // Site's Discord glyph — drawn as a simple game-controller mark.
-            Text(
-                text = "D",
-                color = Color(0xFF8B5CF6),
-                fontWeight = FontWeight.Black,
-                style = WebTextStyles.lg,
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = Color.White,
+            modifier = Modifier.size(22.dp),   // site: h-5.5 stroke-2.5
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Profile dropdown — the site's avatar is an aria-haspopup button. While
+//  logged out it opens account options; the app mirrors that popover with
+//  its available profile/account destinations.
+// ---------------------------------------------------------------------------
+
+private data class ProfileMenuItem(
+    val label: String,
+    val icon: ImageVector,
+    val route: String,
+)
+
+/**
+ * Profile avatar + dropdown menu (site: default avatar image with a subtle
+ * pulse while logged out). Tapping opens the account popover instead of
+ * navigating anywhere directly.
+ */
+@Composable
+private fun ProfileAvatarMenu(onNavigate: (String) -> Unit) {
+    val configuration = LocalConfiguration.current
+    val size = if (configuration.screenWidthDp.dp >= 600.dp) 48.dp else 44.dp
+    val theme = LocalAnikageTheme.current
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .shadow(4.dp, CircleShape, spotColor = Color(0x33000000))
+                .clip(CircleShape)
+                .background(theme.surface.copy(alpha = 0.90f))
+                .border(BorderStroke(1.dp, Color(0x1AFFFFFF)), CircleShape)
+                .clickable { expanded = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            // Site's exact default avatar asset (logged-out).
+            Image(
+                painter = painterResource(id = R.drawable.nav_default_avatar),
+                contentDescription = "Profile menu",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(size),
             )
-        } else {
-            icon?.let {
-                Icon(
-                    it,
-                    contentDescription = contentDescription,
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp),   // site: h-5.5 stroke-2.5
+        }
+
+        if (expanded) {
+            Popup(
+                alignment = Alignment.TopEnd,
+                offset = IntOffset(0, (size.value + 12.dp.value).toInt()),
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                ProfileDropdown(
+                    onDismiss = { expanded = false },
+                    onNavigate = onNavigate,
                 )
             }
         }
     }
 }
 
-/**
- * Profile avatar — site: h-11 w-11 (md: 12) grid rounded-full with the
- * default avatar image; logged-out state pulses at opacity 70.
- */
+/** The account popover: guest header + profile/account options. */
 @Composable
-private fun ProfileAvatarButton(onClick: () -> Unit) {
-    val configuration = LocalConfiguration.current
-    val size = if (configuration.screenWidthDp.dp >= 600.dp) 48.dp else 44.dp
-    val transition = rememberInfiniteTransition(label = "avatar-pulse")
-    val alpha by transition.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 0.85f,
-        animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Reverse),
-        label = "avatar-alpha",
+private fun ProfileDropdown(
+    onDismiss: () -> Unit,
+    onNavigate: (String) -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    val items = listOf(
+        ProfileMenuItem("Settings", Icons.Outlined.Settings, "settings"),
+        ProfileMenuItem("Notifications", Icons.Outlined.Notifications, "notifications"),
+        ProfileMenuItem("Diagnostics", Icons.Outlined.BugReport, "diagnostics"),
+        ProfileMenuItem("About", Icons.Outlined.Info, "about"),
     )
-    Box(
+
+    Column(
         modifier = Modifier
-            .padding(start = 2.dp)                       // site: ml-0.5
-            .size(size)
-            .shadow(4.dp, CircleShape, spotColor = Color(0x33000000))
-            .clip(CircleShape)
-            .background(LocalAnikageTheme.current.surface.copy(alpha = 0.90f))
-            .border(BorderStroke(1.dp, Color(0x1AFFFFFF)), CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .width(240.dp)
+            .shadow(16.dp, RoundedCornerShape(16.dp), spotColor = Color(0x80000000))
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xF20A0A0A))                        // surface/95 + blur
+            .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(16.dp)),
     ) {
-        // Site's exact default avatar asset (logged-out) with its pulse.
-        Image(
-            painter = painterResource(id = R.drawable.nav_default_avatar),
-            contentDescription = "Profile",
-            contentScale = ContentScale.Crop,
+        // Guest header — avatar + status.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier
-                .size(size)
-                .graphicsLayer { this.alpha = alpha },
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x14FFFFFF)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.Person,
+                    contentDescription = null,
+                    tint = theme.fgMuted,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Column {
+                Text(
+                    text = "Guest",
+                    style = WebTextStyles.sm,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Not signed in",
+                    style = WebTextStyles.xs,
+                    color = theme.fgMuted,
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .height(1.dp)
+                .background(Color(0x0FFFFFFF)),
         )
+        // Menu items.
+        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+            items.forEach { item ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            onDismiss()
+                            onNavigate(item.route)
+                        }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Icon(
+                        item.icon,
+                        contentDescription = null,
+                        tint = theme.fgMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = item.label,
+                        style = WebTextStyles.sm,
+                        color = theme.fg,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
     }
 }
 

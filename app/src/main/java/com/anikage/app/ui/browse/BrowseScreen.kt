@@ -64,7 +64,6 @@ import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
-import com.anikage.app.ui.components.LoadingSpinner
 
 /**
  * BROWSE — 1:1 port of anikage.cc/browse.
@@ -179,7 +178,38 @@ fun BrowseScreen(
             Box(modifier = Modifier.weight(1f)) {
                 when {
                     state.loading -> {
-                        LoadingSpinner(modifier = Modifier.fillMaxSize())
+                        // Site: pulsing card grid (animate-pulse bg-fg/5),
+                        // never a bare spinner on black.
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minCard),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                start = 16.dp, end = 16.dp, bottom = 110.dp,
+                            ),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            items(18) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    com.anikage.app.ui.components.SkeletonBlock(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(2f / 3f),
+                                        corner = 12.dp,
+                                    )
+                                    com.anikage.app.ui.components.SkeletonBlock(
+                                        modifier = Modifier
+                                            .fillMaxWidth(0.75f)
+                                            .padding(top = 8.dp)
+                                            .height(12.dp),
+                                        corner = 6.dp,
+                                    )
+                                }
+                            }
+                        }
                     }
                     state.error != null && state.items.isEmpty() -> {
                         Column(

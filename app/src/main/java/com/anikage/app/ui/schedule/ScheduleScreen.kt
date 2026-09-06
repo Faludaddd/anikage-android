@@ -17,12 +17,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -36,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,33 +49,52 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.AiringSchedule
-import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.components.ErrorOrEmptyState
-import com.anikage.app.ui.components.LoadingSpinner
+import com.anikage.app.ui.components.SkeletonBlock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * SCHEDULE — 1:1 port of anikage.cc/schedule (mobile).
+ * SCHEDULE — 1:1 port of anikage.cc/schedule (schedule node).
  *
- * Site: "WEEKLY SCHEDULE" eyebrow → title-hero "Anime Schedule" → subtitle →
- * day strip (active: rounded-2xl bg-action, day/date/ep-count stack) →
- * "Sunday · Today" header + episode rows (rounded-xl border-fg/6 bg-fg/3 p-2,
- * poster w-14, `Ep 23 • 12:30 AM • Aired` with emerald dot).
+ * Site structure:
+ *   ├─ eyebrow "Weekly schedule" + title-hero "Anime Schedule" + subtitle
+ *   ├─ day strip: 7 buttons (weekday.slice(0,3) + bold date + "N ep"),
+ *   │    selected: bg-action text-action-fg shadow-lg;
+ *   │    today:    border-action/40 bg-action/10;
+ *   │    default:  border-fg/6 bg-fg/3 text-fg-muted
+ *   ├─ day header: "Sunday · Today" + "N episodes"
+ *   └─ rows grid: 1 col → sm:2 → xl:3 → 2xl:4
+ *        row: 2:3 poster (w-14 sm:w-16) + title + "Ep N" + time +
+ *        Aired(emerald)/Soon(action, pulsing) status
+ * Clicking a row opens the rich schedule details page (airing countdown,
+ * next-episode info, genres, watch CTA) — never a generic redirect.
  */
 @Composable
-fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
+fun ScheduleScreen(
+    onEntryClick: (AiringSchedule) -> Unit,
+) {
     val context = LocalContext.current
     val repo = remember { AnikageRepository.get(context) }
     val viewModel: ScheduleViewModel = viewModel(factory = ScheduleViewModel.factory(repo))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val theme = LocalAnikageTheme.current
-    val days = state.byDay.keys.toList()
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+
+    // Day grid columns — site: 1 / sm:2 / xl:3 / 2xl:4.
+    val columns = when {
+        screenWidthDp >= 1280 -> 4
+        screenWidthDp >= 840 -> 3
+        screenWidthDp >= 600 -> 2
+        else -> 1
+    }
+
     var selectedDay by remember { mutableStateOf<String?>(null) }
-    val activeDay = selectedDay?.takeIf { it in state.byDay } ?: days.firstOrNull()
+    val activeDay = selectedDay?.takeIf { sel -> state.days.any { it.day == sel } }
+        ?: state.days.firstOrNull()?.day
 
     Column(
         Modifier
@@ -81,21 +103,32 @@ fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
             .padding(top = 80.dp)
     ) {
         when {
-            state.loading -> LoadingSpinner()
-            state.error != null && state.byDay.isEmpty() ->
+            state.loading -> ScheduleSkeleton(columns)
+            state.error != null && state.days.isEmpty() ->
                 ErrorOrEmptyState("Couldn't load schedule", state.error ?: "", onAction = viewModel::load)
-            state.byDay.isEmpty() ->
+            state.days.isEmpty() ->
                 ErrorOrEmptyState("Nothing airing", "No episodes airing this week.", onAction = viewModel::load)
             else -> {
-                // ── Page header (site: eyebrow + title-hero + subtitle) ──────
+                // ── Page header (site: eyebrow + title-hero + subtitle) ──
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    Text(
-                        text = "WEEKLY SCHEDULE",
-                        style = WebTextStyles.xs2,
-                        color = theme.fgMuted,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 2.sp,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.CalendarMonth,
+                            contentDescription = null,
+                            tint = theme.fgMuted,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                            text = "WEEKLY SCHEDULE",
+                            style = WebTextStyles.xs2,
+                            color = theme.fgMuted,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 2.sp,
+                        )
+                    }
                     Text(
                         text = "Anime Schedule",
                         style = WebTextStyles.titleHero,
@@ -103,48 +136,65 @@ fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
                         modifier = Modifier.padding(top = 4.dp),
                     )
                     Text(
-                        text = "New episodes airing this week",
+                        text = "New episodes airing this week — pick a day below.",
                         style = WebTextStyles.sm,
                         color = theme.fgMuted,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 24.dp),
+                        modifier = Modifier.padding(top = 4.dp, bottom = 20.dp),
                     )
 
-                    // ── Day strip (site: no-scrollbar horizontal buttons) ────
+                    // ── Day strip — 7 site-exact buttons with date numbers.
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        days.forEach { day ->
-                            val entries = state.byDay[day].orEmpty()
-                            val selected = day == activeDay
+                        state.days.forEach { day ->
+                            val selected = day.day == activeDay
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalArrangement = Arrangement.spacedBy(1.dp),
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(16.dp))
                                     .background(
-                                        if (selected) theme.action else Color.Transparent
+                                        when {
+                                            selected -> theme.action
+                                            day.isToday -> theme.action.copy(alpha = 0.10f)
+                                            else -> Color(0x08FFFFFF)
+                                        }
                                     )
-                                    .clickable { selectedDay = day }
+                                    .border(
+                                        1.dp,
+                                        when {
+                                            selected -> Color.Transparent
+                                            day.isToday -> theme.action.copy(alpha = 0.40f)
+                                            else -> Color(0x0FFFFFFF)
+                                        },
+                                        RoundedCornerShape(16.dp),
+                                    )
+                                    .clickable { selectedDay = day.day }
                                     .padding(horizontal = 14.dp, vertical = 8.dp),
                             ) {
                                 Text(
-                                    text = day.substringBefore(' ').uppercase(),
+                                    text = day.shortDay.uppercase(),
                                     style = WebTextStyles.xs2,
-                                    color = if (selected) theme.actionFg.copy(alpha = 0.80f) else theme.fgMuted,
+                                    color = when {
+                                        selected -> theme.actionFg.copy(alpha = 0.80f)
+                                        else -> theme.fgMuted
+                                    },
                                     fontWeight = FontWeight.SemiBold,
                                     letterSpacing = 1.sp,
                                 )
+                                // Date number — always present (the fix).
                                 Text(
-                                    text = day.substringAfter(' ', ""),
-                                    style = WebTextStyles.base.copy(fontSize = 17.sp),
+                                    text = day.dateOfMonth.toString(),
+                                    style = WebTextStyles.lg,
                                     color = if (selected) theme.actionFg else theme.fg,
                                     fontWeight = FontWeight.Bold,
+                                    lineHeight = 20.sp,
                                 )
                                 Text(
-                                    text = "${entries.size} ep",
+                                    text = "${day.entries.size} ep",
                                     style = WebTextStyles.xs2,
                                     color = if (selected) theme.actionFg.copy(alpha = 0.70f) else theme.fgMuted,
                                     fontWeight = FontWeight.Medium,
@@ -154,34 +204,79 @@ fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
                     }
                 }
 
-                // ── Day header + rows ────────────────────────────────────────
-                val entries = state.byDay[activeDay].orEmpty()
-                LazyColumn(
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    item {
-                        Row(
-                            Modifier
+                // ── Day header + entries grid ────────────────────────────
+                val active = state.days.firstOrNull { it.day == activeDay }
+                val entries = active?.entries.orEmpty()
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = (activeDay ?: "Schedule") + if (active?.isToday == true) " · Today" else "",
+                            style = WebTextStyles.titleSection,
+                            color = theme.fg,
+                        )
+                        Text(
+                            text = "${entries.size} episode" + if (entries.size == 1) "" else "s",
+                            style = WebTextStyles.xs,
+                            color = theme.fgMuted,
+                        )
+                    }
+                    if (entries.isEmpty()) {
+                        // Site: circle icon + "No episodes on {day}".
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                                .padding(vertical = 64.dp),
                         ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0x0DFFFFFF)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Default.CalendarMonth,
+                                    contentDescription = null,
+                                    tint = theme.fgMuted,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                            }
                             Text(
-                                text = activeDay ?: "Schedule",
+                                text = "No episodes on ${activeDay ?: ""}",
                                 style = WebTextStyles.titleSection,
                                 color = theme.fg,
+                                modifier = Modifier.padding(top = 12.dp),
                             )
                             Text(
-                                text = "${entries.size} episodes",
-                                style = WebTextStyles.xs,
+                                text = "Nothing scheduled for this day. Try another day from the strip above.",
+                                style = WebTextStyles.sm,
                                 color = theme.fgMuted,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .fillMaxWidth(0.8f),
                             )
                         }
-                    }
-                    items(entries, key = { it.id }) { schedule ->
-                        ScheduleRow(schedule) { onAnimeClick(schedule.media) }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(columns),
+                            contentPadding = PaddingValues(
+                                start = 16.dp, end = 16.dp, bottom = 120.dp,
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            items(entries, key = { it.id }) { schedule ->
+                                ScheduleRow(schedule) { onEntryClick(schedule) }
+                            }
+                        }
                     }
                 }
             }
@@ -189,7 +284,7 @@ fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
     }
 }
 
-/** Site row — rounded-xl border-fg/6 bg-fg/3 p-2, poster w-14 2:3 + meta. */
+/** Site row — group flex gap-3 rounded-xl border-fg/6 bg-fg/3 p-2. */
 @Composable
 private fun ScheduleRow(schedule: AiringSchedule, onClick: () -> Unit) {
     val theme = LocalAnikageTheme.current
@@ -206,7 +301,7 @@ private fun ScheduleRow(schedule: AiringSchedule, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(8.dp),
     ) {
-        // Poster — site: aspect-2/3 w-14 (56px) rounded-lg.
+        // Poster — site: aspect-2/3 w-14 (sm:w-16) rounded-lg.
         Box(
             modifier = Modifier
                 .width(56.dp)
@@ -258,21 +353,63 @@ private fun ScheduleRow(schedule: AiringSchedule, onClick: () -> Unit) {
                     style = WebTextStyles.xs,
                     color = theme.fgMuted,
                 )
-                if (aired) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF34D399))   // emerald-400
-                    )
-                    Text(
-                        text = "Aired",
-                        style = WebTextStyles.xs,
-                        color = Color(0xFF34D399),
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
+                // Status — site: Aired (emerald, solid dot) / Soon (action,
+                // pulsing dot).
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (aired) Color(0xFF34D399) else theme.action   // emerald-400 / action
+                        )
+                )
+                Text(
+                    text = if (aired) "Aired" else "Soon",
+                    style = WebTextStyles.xs,
+                    color = if (aired) Color(0xFF34D399) else theme.action,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Skeleton — site: 7 pulsing day pills (h-60px) + 8 pulsing rows
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ScheduleSkeleton(columns: Int) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+    ) {
+        SkeletonBlock(modifier = Modifier.width(160.dp).height(24.dp), corner = 8.dp)
+        Spacer(Modifier.height(8.dp))
+        SkeletonBlock(modifier = Modifier.width(220.dp).height(30.dp), corner = 10.dp)
+        Spacer(Modifier.height(8.dp))
+        SkeletonBlock(modifier = Modifier.width(260.dp).height(14.dp), corner = 7.dp)
+        Spacer(Modifier.height(20.dp))
+        // Day strip.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            repeat(7) {
+                SkeletonBlock(
+                    modifier = Modifier.width(58.dp).height(60.dp),
+                    corner = 16.dp,
+                )
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        // Entry rows.
+        repeat(6) {
+            SkeletonBlock(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(88.dp),
+                corner = 12.dp,
+            )
+            Spacer(Modifier.height(10.dp))
         }
     }
 }

@@ -179,6 +179,44 @@ class AnikageApi(
     }
 
     // ---------------------------------------------------------------------
+    //  Music — /api/animethemes (the site's music tab proxy).
+    // ---------------------------------------------------------------------
+
+    /**
+     * Search anime themes — the exact call the site's Music page makes:
+     * `path=/search`, anime included with `animethemes.song,images`.
+     */
+    suspend fun musicSearch(query: String): AnikageMusicSearchResponse {
+        val url = url(base, "/api/animethemes") {
+            param("path", "/search")
+            param("include[anime]", "animethemes.song,images")
+            param("q", query)
+            param("fields[search]", "anime")
+        }
+        return json.decodeFromString(get(url))
+    }
+
+    /**
+     * Full theme set for one anime — the site's music/info page call:
+     * entries with video + audio links, song titles, images, AniList id.
+     */
+    suspend fun musicAnime(slug: String): AnikageMusicAnime {
+        val url = url(base, "/api/animethemes") {
+            param("path", "/anime/$slug")
+            param(
+                "include",
+                "animethemes.animethemeentries.videos," +
+                    "animethemes.animethemeentries.videos.audio," +
+                    "animethemes.song,images,resources",
+            )
+            param("filter[site]", "Anilist")
+            param("fields[resource]", "external_id")
+        }
+        val response = json.decodeFromString<AnikageMusicAnimeResponse>(get(url))
+        return response.anime
+    }
+
+    // ---------------------------------------------------------------------
     //  Auth-side endpoints (comments / views)
     // ---------------------------------------------------------------------
 

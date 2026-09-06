@@ -15,9 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -146,9 +143,7 @@ fun AnimeCard(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            Icon(
-                                Icons.Default.Star,
-                                contentDescription = null,
+                            com.anikage.app.ui.components.LucideStarFilled(
                                 tint = Config.Theme.star,
                                 modifier = Modifier.size(10.dp),
                             )

@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -207,8 +206,10 @@ fun HeroCarousel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 current.averageScore?.let { score ->
+                    // Lucide star + % — the site's hero score pill
+                    // (border-yellow-500/40 bg-yellow-500/20 text-yellow-400).
                     MetaPill(
-                        icon = Icons.Default.Star,
+                        lucideStar = true,
                         text = "${score}%",
                         iconTint = Color(0xFFFACC15),
                         border = Color(0x66FACC15),       // yellow-500/40
@@ -339,6 +340,7 @@ fun HeroCarousel(
 @Composable
 private fun MetaPill(
     icon: ImageVector? = null,
+    lucideStar: Boolean = false,
     text: String,
     iconTint: Color = Color(0x99FFFFFF),
     border: Color = Color(0x26FFFFFF),
@@ -356,7 +358,12 @@ private fun MetaPill(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (icon != null) {
+        if (lucideStar) {
+            com.anikage.app.ui.components.LucideStarFilled(
+                tint = iconTint,
+                modifier = Modifier.size(12.dp),
+            )
+        } else if (icon != null) {
             Icon(
                 icon,
                 contentDescription = null,

@@ -1,6 +1,7 @@
 package com.anikage.app.ui.components
 
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -31,7 +33,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -292,7 +293,8 @@ fun SiteCarouselRow(
     items: List<Anime>,
     onClick: (Anime) -> Unit,
     modifier: Modifier = Modifier,
-    cardWidth: Dp = 115.dp,
+    cardWidth: Dp = siteCardWidth(androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp),
+    edgeToEdge: Boolean = false,
 ) {
     val theme = LocalAnikageTheme.current
     val listState = rememberLazyListState()
@@ -324,8 +326,10 @@ fun SiteCarouselRow(
     Box(modifier = modifier.fillMaxWidth()) {
         LazyRow(
             state = listState,
-            // Site: container-custom max-width 96% ≈ 8px inset each side.
-            contentPadding = PaddingValues(horizontal = 8.dp),
+            // Inside a padded section (site container-custom) the cards align
+            // flush with the section header; edge-to-edge rows keep the site's
+            // 8px inner inset.
+            contentPadding = PaddingValues(horizontal = if (edgeToEdge) 8.dp else 0.dp),
             // Site: .card-link margin-right calc(4px*1.5) = 6px between cards.
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -495,15 +499,13 @@ fun Top10Row(
                 overflow = TextOverflow.Ellipsis,
                 lineHeight = 18.sp,
             )
-            // Meta: ★ 9.1 • FALL • FINISHED (text-xs zinc-500).
+            // Meta: ★ 9.1 • FALL • FINISHED (text-xs zinc-500) — lucide outline.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 anime.averageScore?.let { score ->
-                    Icon(
-                        Icons.Default.Star,
-                        contentDescription = null,
+                    LucideStarOutline(
                         tint = Color(0xFFA1A1AA),
                         modifier = Modifier.size(12.dp),
                     )
@@ -711,30 +713,15 @@ fun FeaturedBanner(
                             .padding(start = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        // Score pill — yellow-400/10 bg, yellow-300 text.
+                        // Score pill — lucide star + % (site: yellow-400/10
+                        // bg, yellow-400/25 border, yellow-300 text, bold).
                         anime.averageScore?.let { score ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(Color(0x1AFACC15))
-                                    .border(1.dp, Color(0x40FACC15), RoundedCornerShape(50))
-                                    .padding(horizontal = 10.dp, vertical = 2.dp),
-                            ) {
-                                Icon(
-                                    Icons.Default.Star,
-                                    contentDescription = null,
-                                    tint = Color(0xFFFDE047),
-                                    modifier = Modifier.size(12.dp),
-                                )
-                                Text(
-                                    text = "${score}%",
-                                    style = WebTextStyles.xs,
-                                    color = Color(0xFFFDE047),
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
+                            RatingPill(
+                                display = "$score%",
+                                tint = Color(0xFFFDE047),           // yellow-300
+                                background = Color(0x1AFACC15),     // yellow-400/10
+                                border = Color(0x40FACC15),         // yellow-400/25
+                            )
                         }
                         Text(
                             text = anime.displayTitle(),
@@ -786,3 +773,196 @@ fun FeaturedBanner(
 
 /** Radial blur approximation of the site's blur-[80px] glow. */
 private fun Modifier.blurEffect(): Modifier = this.alpha(0.6f)
+
+// ---------------------------------------------------------------------------
+//  Lucide icons — exact vector ports of the site's inline SVGs.
+//  The site renders its rating stars with lucide-star (stroke 2, round
+//  caps): filled on hero/featured score pills, outlined in Top10/list meta.
+// ---------------------------------------------------------------------------
+
+/** Filled lucide star (site: fill-yellow-400/300 score pills). */
+@Composable
+fun LucideStarFilled(
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Icon(
+        painter = androidx.compose.ui.res.painterResource(com.anikage.app.R.drawable.ic_star_fill),
+        contentDescription = null,
+        tint = tint,
+        modifier = modifier,
+    )
+}
+
+/** Outline lucide star (site: Top10 meta `size-3 text-zinc-500`). */
+@Composable
+fun LucideStarOutline(
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Icon(
+        painter = androidx.compose.ui.res.painterResource(com.anikage.app.R.drawable.ic_star_outline),
+        contentDescription = null,
+        tint = tint,
+        modifier = modifier,
+    )
+}
+
+/**
+ * Score pill — the site's rating indicator: lucide star + value in a
+ * rounded-full chip (e.g. hero `★ 90%` yellow-on-blur, featured `★ 86%`
+ * yellow-400/10 pill). One polished component so every carousel, banner
+ * and details page renders it identically.
+ *
+ * @param display e.g. "90%" (hero/featured) or "9.1" (Top10/lists).
+ */
+@Composable
+fun RatingPill(
+    display: String,
+    tint: Color = Color(0xFFFACC15),                    // yellow-400
+    background: Color = Color(0x33FACC15),              // yellow-500/20
+    border: Color = Color(0x66FACC15),                  // yellow-500/40
+    outlineStar: Boolean = false,                       // site lists use outline
+    bold: Boolean = true,
+    iconSize: Dp = 12.dp,
+    horizontalPadding: Dp = 10.dp,
+    verticalPadding: Dp = 2.dp,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),   // site gap-1
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(background)
+            .border(1.dp, border, RoundedCornerShape(50))
+            .padding(horizontal = horizontalPadding, vertical = verticalPadding),
+    ) {
+        if (outlineStar) {
+            LucideStarOutline(tint = tint, modifier = Modifier.size(iconSize))
+        } else {
+            LucideStarFilled(tint = tint, modifier = Modifier.size(iconSize))
+        }
+        Text(
+            text = display,
+            style = WebTextStyles.xs,
+            color = tint,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Site-wide responsive primitives
+// ---------------------------------------------------------------------------
+
+/**
+ * The site's `container-custom` — every content section lives in a centred
+ * container: `width:1756px; max-width:96%; margin-inline:auto`. Section
+ * headers AND the cards below them align to this container's edges, which
+ * is why they never hug the screen edge on the website.
+ *
+ * Phone: full width with 16dp gutters. Wide screens: capped at 1400dp and
+ * centred — exactly how the site keeps its content column readable.
+ */
+@Composable
+fun SiteContainer(content: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 1756.dp)   // site: container-custom width 1756px
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+        ) {
+            content()
+        }
+    }
+}
+
+/** Responsive card width — site `.card-cover` breakpoints: 115/135/155/165. */
+fun siteCardWidth(screenWidthDp: Int): Dp = when {
+    screenWidthDp >= 1280 -> 165.dp
+    screenWidthDp >= 840 -> 155.dp
+    screenWidthDp >= 600 -> 135.dp
+    else -> 115.dp
+}
+
+/** Section gap — site `main.container-custom gap-6 sm:gap-8 md:gap-12`. */
+fun siteSectionGap(screenWidthDp: Int): Dp = when {
+    screenWidthDp >= 840 -> 48.dp
+    screenWidthDp >= 600 -> 32.dp
+    else -> 24.dp
+}
+
+// ---------------------------------------------------------------------------
+//  Skeleton loading — the site's `animate-pulse bg-surface-card` placeholders.
+//  Every image slot on the website pulses a surface-card block while it
+//  loads; the app reproduces the same branded loading state instead of a
+//  bare spinner.
+// ---------------------------------------------------------------------------
+
+/** Pulsing placeholder block (site: animate-pulse bg-surface-card). */
+@Composable
+fun SkeletonBlock(modifier: Modifier = Modifier, corner: Dp = 12.dp) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "skeleton")
+    val alpha by transition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            androidx.compose.animation.core.tween(900),
+            androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "skeleton-alpha",
+    )
+    Box(
+        modifier = modifier
+            .graphicsLayer { this.alpha = alpha }
+            .clip(RoundedCornerShape(corner))
+            .background(Color(0x14FFFFFF)),       // surface-card
+    )
+}
+
+// ---------------------------------------------------------------------------
+//  SiteSwitch — the site's exact toggle (settings_node.js):
+//    track: block h-7 w-12 rounded-full duration-300
+//           ON: bg-action · OFF: bg-white/10 · disabled: opacity-50
+//    knob:  absolute top-0.5 left-0.5 h-6 w-6 rounded-full duration-300
+//           ON: translate-x-5 + bg-surface (dark thumb on action track —
+//           NEVER a plain-white blob) · OFF: bg-zinc-500
+// ---------------------------------------------------------------------------
+
+@Composable
+fun SiteSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val theme = LocalAnikageTheme.current
+    val knobOffset by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (checked) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 300),
+        label = "siteSwitchKnob",
+    )
+    Box(
+        modifier = modifier
+            .size(width = 48.dp, height = 28.dp)
+            .alpha(if (enabled) 1f else 0.5f)
+            .clip(RoundedCornerShape(50))
+            .background(if (checked) theme.action else Color(0x1AFFFFFF))
+            .clickable(enabled = enabled) { onCheckedChange(!checked) },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(start = 2.dp)
+                .offset(x = (20.dp * knobOffset))
+                .size(24.dp)
+                .clip(RoundedCornerShape(50))
+                .background(if (checked) theme.surface else Color(0xFF71717A)),
+        )
+    }
+}

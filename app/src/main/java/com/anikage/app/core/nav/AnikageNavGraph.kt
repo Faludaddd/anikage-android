@@ -52,10 +52,11 @@ import com.anikage.app.ui.components.FloatingBottomNav
 import com.anikage.app.ui.components.FloatingTopBar
 import com.anikage.app.ui.details.DetailsScreen
 import com.anikage.app.ui.home.HomeScreen
+import com.anikage.app.ui.music.MusicInfoScreen
 import com.anikage.app.ui.music.MusicScreen
 import com.anikage.app.ui.notifications.NotificationsScreen
 import com.anikage.app.ui.player.WatchScreen
-import com.anikage.app.ui.profile.ProfileScreen
+import com.anikage.app.ui.schedule.ScheduleDetailScreen
 import com.anikage.app.ui.schedule.ScheduleScreen
 import com.anikage.app.ui.search.SearchScreen
 import com.anikage.app.ui.settings.DiagnosticsScreen
@@ -89,7 +90,9 @@ fun AnikageApp() {
                 composable(Routes.HOME) {
                     HomeScreen(
                         onAnimeClick = { navController.navigate(Routes.details(it.id)) },
-                        onWatchClick = { navController.navigate(Routes.watch(it.id, 1)) },
+                        onWatchClick = { anime ->
+                            navController.navigate(Routes.watch(anime.id, 1, anime.slug))
+                        },
                         onSeeAllClick = { navController.navigate(Routes.BROWSE) },
                     )
                 }
@@ -100,7 +103,11 @@ fun AnikageApp() {
                 }
                 composable(Routes.SCHEDULE) {
                     ScheduleScreen(
-                        onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onEntryClick = { schedule ->
+                            navController.navigate(
+                                Routes.scheduleDetails(schedule.media.id, schedule.episode, schedule.airingAt)
+                            )
+                        },
                     )
                 }
                 composable(Routes.SEARCH) {
@@ -111,7 +118,9 @@ fun AnikageApp() {
                 }
                 composable(Routes.MUSIC) {
                     MusicScreen(
-                        onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onOpenTheme = { slug, type ->
+                            navController.navigate(Routes.musicInfo(slug, type))
+                        },
                     )
                 }
                 composable(Routes.TORRENTS) {
@@ -119,14 +128,6 @@ fun AnikageApp() {
                 }
                 composable(Routes.NOTIFICATIONS) {
                     NotificationsScreen(
-                        onBackClick = { navController.popBackStack() },
-                        onOpenSettings = {
-                            navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
-                        },
-                    )
-                }
-                composable(Routes.PROFILE) {
-                    ProfileScreen(
                         onBackClick = { navController.popBackStack() },
                         onOpenSettings = {
                             navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
@@ -153,8 +154,8 @@ fun AnikageApp() {
                         animeId = id,
                         onBackClick = { navController.popBackStack() },
                         onAnimeClick = { navController.navigate(Routes.details(it.id)) },
-                        onWatchClick = { aId, ep ->
-                            navController.navigate(Routes.watch(aId, ep))
+                        onWatchClick = { aId, ep, slug ->
+                            navController.navigate(Routes.watch(aId, ep, slug))
                         },
                     )
                 }
@@ -162,15 +163,59 @@ fun AnikageApp() {
                     route = Routes.WATCH,
                     arguments = listOf(
                         navArgument("id") { type = NavType.IntType },
-                        navArgument("episode") { type = NavType.IntType },
+                        navArgument("episode") { type = NavType.IntType; defaultValue = 1 },
+                        navArgument("slug") { type = NavType.StringType; defaultValue = "" },
                     ),
                 ) { backStackEntry ->
                     val id = backStackEntry.arguments?.getInt("id") ?: return@composable
                     val ep = backStackEntry.arguments?.getInt("episode") ?: 1
+                    val slug = backStackEntry.arguments
+                        ?.getString("slug")
+                        ?.takeIf { it.isNotBlank() }
                     WatchScreen(
                         animeId = id,
                         initialEpisode = ep,
+                        slug = slug,
                         onBackClick = { navController.popBackStack() },
+                    )
+                }
+                composable(
+                    route = Routes.MUSIC_INFO,
+                    arguments = listOf(
+                        navArgument("slug") { type = NavType.StringType },
+                        navArgument("type") { type = NavType.StringType; defaultValue = "" },
+                    ),
+                ) { backStackEntry ->
+                    val slug = backStackEntry.arguments?.getString("slug") ?: return@composable
+                    val type = backStackEntry.arguments?.getString("type") ?: ""
+                    MusicInfoScreen(
+                        slug = slug,
+                        type = type,
+                        onBackClick = { navController.popBackStack() },
+                    )
+                }
+                composable(
+                    route = Routes.SCHEDULE_DETAILS,
+                    arguments = listOf(
+                        navArgument("id") { type = NavType.IntType },
+                        navArgument("episode") { type = NavType.IntType; defaultValue = 1 },
+                        navArgument("airingAt") { type = NavType.LongType; defaultValue = 0L },
+                    ),
+                ) { backStackEntry ->
+                    val id = backStackEntry.arguments?.getInt("id") ?: return@composable
+                    val ep = backStackEntry.arguments?.getInt("episode") ?: 1
+                    val airingAt = backStackEntry.arguments?.getLong("airingAt") ?: 0L
+                    ScheduleDetailScreen(
+                        animeId = id,
+                        episode = ep,
+                        airingAt = airingAt,
+                        onBackClick = { navController.popBackStack() },
+                        onWatchClick = { aId, aEp, slug ->
+                            navController.navigate(Routes.watch(aId, aEp, slug))
+                        },
+                        onViewAnime = { aId ->
+                            navController.navigate(Routes.details(aId))
+                        },
                     )
                 }
                 composable(Routes.ABOUT) {
@@ -196,9 +241,6 @@ fun AnikageApp() {
                     },
                     onNotificationsClick = {
                         navController.navigate(Routes.NOTIFICATIONS) { launchSingleTop = true }
-                    },
-                    onProfileClick = {
-                        navController.navigate(Routes.PROFILE) { launchSingleTop = true }
                     },
                     modifier = Modifier.zIndex(10f),
                 )

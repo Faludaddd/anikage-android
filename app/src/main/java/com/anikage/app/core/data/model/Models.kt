@@ -72,6 +72,13 @@ data class HomeFeed(
 data class Anime(
     val id: Int,
     val idMal: Int? = null,
+    /**
+     * Anikage catalogue slug — the key every streaming endpoint needs
+     * (episodes/servers/sources). The site's own payloads carry it on every
+     * media item; keeping it here means the watch pipeline never has to
+     * re-resolve it via fragile title search.
+     */
+    val slug: String? = null,
     val title: AnimeTitle = AnimeTitle(),
     val coverImage: CoverImage = CoverImage(),
     val bannerImage: String? = null,

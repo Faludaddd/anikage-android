@@ -278,3 +278,105 @@ data class AnikageCommentAuthor(
     val avatarFrame: String? = null,
     val role: String? = null,
 )
+
+// ---------------------------------------------------------------------------
+//  Music — GET /api/animethemes (proxy of the animethemes.moe API).
+//
+//  Search:  ?path=/search&include[anime]=animethemes.song,images
+//            &q={query}&fields[search]=anime
+//           -> { search: { anime: [ { name, slug, year, season, format,
+//              synopsis, animethemes[ { slug, type, song } ], images[] } ] } }
+//
+//  Anime:   ?path=/anime/{slug}&include=animethemes.animethemeentries.videos,
+//            animethemes.animethemeentries.videos.audio,animethemes.song,
+//            images,resources&filter[site]=Anilist&fields[resource]=external_id
+//           -> { anime: { ...same + entries with video/audio links } }
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class AnikageMusicSearchResponse(
+    val search: AnikageMusicSearch = AnikageMusicSearch(),
+)
+
+@Serializable
+data class AnikageMusicSearch(
+    val anime: List<AnikageMusicAnime> = emptyList(),
+)
+
+@Serializable
+data class AnikageMusicAnime(
+    val id: Int? = null,
+    val name: String? = null,
+    val slug: String? = null,
+    val year: Int? = null,
+    val season: String? = null,
+    @SerialName("media_format") val mediaFormat: String? = null,
+    val synopsis: String? = null,
+    val animethemes: List<AnikageMusicTheme> = emptyList(),
+    val images: List<AnikageMusicImage> = emptyList(),
+    val resources: List<AnikageMusicResource> = emptyList(),
+) {
+    fun coverUrl(): String? = images.firstOrNull { it.link != null }?.link
+    fun anilistId(): Int? = resources.firstOrNull()?.externalId
+}
+
+@Serializable
+data class AnikageMusicTheme(
+    val id: Int? = null,
+    val sequence: Int? = null,
+    val slug: String? = null,          // "OP1", "ED1", "ED1-TV" …
+    val type: String? = null,          // "OP" | "ED"
+    val song: AnikageMusicSong? = null,
+    val animethemeentries: List<AnikageMusicEntry> = emptyList(),
+)
+
+@Serializable
+data class AnikageMusicSong(
+    val id: Int? = null,
+    val title: String? = null,
+)
+
+@Serializable
+data class AnikageMusicImage(
+    val id: Int? = null,
+    val facet: String? = null,         // "Large Cover" …
+    val path: String? = null,
+    val link: String? = null,
+)
+
+@Serializable
+data class AnikageMusicResource(
+    @SerialName("external_id") val externalId: Int? = null,
+    val site: String? = null,
+    @SerialName("animeresource") val animeresource: AnikageMusicResourceLink? = null,
+)
+
+@Serializable
+data class AnikageMusicResourceLink(
+    @SerialName("as") val asField: String? = null,
+)
+
+@Serializable
+data class AnikageMusicEntry(
+    val id: Int? = null,
+    val videos: List<AnikageMusicVideo> = emptyList(),
+)
+
+@Serializable
+data class AnikageMusicVideo(
+    val id: Int? = null,
+    val link: String? = null,          // https://v.animethemes.moe/…webm
+    val audio: AnikageMusicAudio? = null,
+)
+
+@Serializable
+data class AnikageMusicAudio(
+    val id: Int? = null,
+    val link: String? = null,          // https://a.animethemes.moe/…ogg
+)
+
+/** Wrapper for the anime-detail music call: { anime: AnikageMusicAnime }. */
+@Serializable
+data class AnikageMusicAnimeResponse(
+    val anime: AnikageMusicAnime = AnikageMusicAnime(),
+)

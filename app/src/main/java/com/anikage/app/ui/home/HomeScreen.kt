@@ -7,14 +7,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,6 +25,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -33,26 +40,26 @@ import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.components.ErrorOrEmptyState
 import com.anikage.app.ui.components.FeaturedBanner
 import com.anikage.app.ui.components.HeroCarousel
-import com.anikage.app.ui.components.LoadingGrid
 import com.anikage.app.ui.components.SectionBadge
 import com.anikage.app.ui.components.SectionHeader
 import com.anikage.app.ui.components.SiteCarouselRow
+import com.anikage.app.ui.components.SiteContainer
+import com.anikage.app.ui.components.SkeletonBlock
 import com.anikage.app.ui.components.Top10Row
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import com.anikage.app.ui.components.siteCardWidth
+import com.anikage.app.ui.components.siteSectionGap
 
 /**
- * HOME — 1:1 port of the anikage.cc homepage (mobile layout).
+ * HOME — 1:1 port of the anikage.cc homepage.
  *
  * Site section order (from the live DOM):
- *   hero (spotlight, 72vh) → Featured Anime [Editor's Pick] →
- *   Trending Now [HOT] → Popular This Season [SEASONAL] →
- *   Most Favorite [TOP] → Top 10 Anime ⇄ Popular Movies →
- *   Coming Soon [UPCOMING]
- * Sections live in `main.container-custom flex-col gap-6` (24px), rails
- * scroll horizontally with edge-fade arrows.
+ *   hero (spotlight, 72vh, full-bleed w-screen) → Featured Anime [Editor's
+ *   Pick] → Trending Now [HOT] → Popular This Season [SEASONAL] →
+ *   Most Favorite [TOP] → Top 10 Anime ⇄ Popular Movies → Coming Soon
+ *   [UPCOMING]
+ * Sections live in `main.container-custom flex-col gap-6 sm:gap-8 md:gap-12`
+ * (site breakpoints), so headers and cards share the container's edges —
+ * never the raw screen edge.
  */
 @Composable
 fun HomeScreen(
@@ -84,9 +91,10 @@ private fun HomeContent(
 ) {
     val theme = LocalAnikageTheme.current
     val feed = state.feed
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
 
     if (state.loading) {
-        LoadingGrid(columns = 3, rows = 4)
+        HomeSkeleton()
         return
     }
 
@@ -103,10 +111,10 @@ private fun HomeContent(
         modifier = Modifier
             .fillMaxSize()
             .background(theme.surface),
-        // Site: main.container-custom flex flex-col gap-6 (24px) + bottom nav space.
+        // Site: main.container-custom + bottom nav clearance.
         contentPadding = PaddingValues(bottom = 96.dp),
     ) {
-        // 1 ── HERO (spotlight slides with TVDB fanart + clearLogo).
+        // 1 ── HERO (spotlight slides with TVDB fanart + clearLogo) — full-bleed.
         if (feed.spotlight.isNotEmpty()) {
             item(key = "hero") {
                 HeroCarousel(
@@ -114,16 +122,14 @@ private fun HomeContent(
                     onAnimeClick = onAnimeClick,
                     onWatchClick = onWatchClick,
                 )
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(siteSectionGap(screenWidthDp)))
             }
         }
 
         // 2 ── FEATURED / Editor's Pick.
         feed.featured?.let { featured ->
             item(key = "featured") {
-                Section(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                ) {
+                Section {
                     FeaturedBanner(
                         anime = featured,
                         onWatchClick = onWatchClick,
@@ -221,18 +227,25 @@ private fun HomeContent(
     }
 }
 
-/** One site section: 24px top gap (gap-6) + 16px horizontal container padding. */
+/**
+ * One site section: container-custom gap (24/32/48dp responsive) between
+ * sections, content aligned to the container edges — headers line up with
+ * the cards beneath them, exactly like the site.
+ */
 @Composable
 private fun Section(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
+    val gap = siteSectionGap(LocalConfiguration.current.screenWidthDp)
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 24.dp)
+            .padding(top = gap),
     ) {
-        content()
+        SiteContainer {
+            content()
+        }
     }
 }
 
@@ -254,5 +267,63 @@ private fun MoviesToggle(label: String, onClick: () -> Unit) {
             color = theme.fgMuted,
             fontWeight = FontWeight.Medium,
         )
+    }
+}
+
+/**
+ * Home loading state — the site pulses placeholders (animate-pulse
+ * bg-surface-card) while the feed hydrates; this mirrors the page shape:
+ * hero block, section header bars, card rows.
+ */
+@Composable
+private fun HomeSkeleton() {
+    val theme = LocalAnikageTheme.current
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val cardWidth = siteCardWidth(screenWidthDp)
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(theme.surface),
+        contentPadding = PaddingValues(bottom = 96.dp),
+    ) {
+        item(key = "skel-hero") {
+            SkeletonBlock(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 10f),
+                corner = 0.dp,
+            )
+            Spacer(Modifier.height(24.dp))
+        }
+        item(key = "skel-featured") {
+            Section {
+                SkeletonBlock(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(212.dp),
+                    corner = 28.dp,
+                )
+            }
+        }
+        repeat(2) { section ->
+            item(key = "skel-row-$section") {
+                Section {
+                    SkeletonBlock(
+                        modifier = Modifier.width(180.dp).height(18.dp),
+                        corner = 9.dp,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        repeat(4) {
+                            SkeletonBlock(
+                                modifier = Modifier
+                                    .width(cardWidth)
+                                    .aspectRatio(2f / 3f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }

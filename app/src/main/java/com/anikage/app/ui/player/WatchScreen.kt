@@ -1,5 +1,6 @@
 package com.anikage.app.ui.player
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,10 +18,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -29,6 +32,7 @@ import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -41,9 +45,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,38 +67,44 @@ import com.anikage.app.core.data.api.AnikageComment
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.components.ErrorOrEmptyState
-import com.anikage.app.ui.components.LoadingSpinner
+import com.anikage.app.ui.components.SkeletonBlock
 import java.time.Duration
 import java.time.Instant
 
 /**
- * WATCH — 1:1 port of anikage.cc/anime/watch/{id}?ep=n (mobile).
+ * WATCH — 1:1 port of anikage.cc/anime/watch/{id}?ep=n.
  *
- * Site layout (portrait page, no forced landscape):
- *   ├─ player 16:9 rounded-2xl with ambient glow (back button overlay)
- *   ├─ EP chip + "14,702 views" + action buttons (Add to List / Download / Report)
- *   ├─ server panel: "Servers (4)" + SUB/DUB segmented + server chips
- *   ├─ mobile tabs: Episodes (count) | Comments
- *   ├─ episode rows: h-76 thumb + title + desc + progress bar
- *   └─ comments: header card + list
+ * Site layout (watch13.css grid, svelte-byl3q0):
+ *   mobile:  stage → meta(notice+row+servers) → tabs → episodes → comments
+ *   lg:      "stage side" / "lower side" grid — player 1fr | side 35→28%,
+ *            side column carries the episode list; the lower column keeps
+ *            meta + comments. Player: player-glass rounded-2xl with an
+ *            ambient blur glow behind it.
+ *
+ * Loading is the site's animate-pulse skeleton (never a bare spinner on a
+ * black screen), and every stream failure is surfaced with retry/switch
+ * actions instead of a silent black player.
  */
 @Composable
 fun WatchScreen(
     animeId: Int,
     initialEpisode: Int,
-    onBackClick: () -> Unit,
+    slug: String? = null,
+    onBackClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as android.app.Application
     val repo = remember { AnikageRepository.get(context) }
     val viewModel: WatchViewModel = viewModel(
-        factory = WatchViewModel.factory(app, repo, animeId, initialEpisode)
+        factory = WatchViewModel.factory(app, repo, animeId, initialEpisode, slug)
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
     val player = remember { viewModel.player() }
     val theme = LocalAnikageTheme.current
+    val configuration = LocalConfiguration.current
+    val isWide = configuration.screenWidthDp.dp >= 840.dp   // site lg (2-col watch grid)
 
-    // Mobile tab: 0 = Episodes, 1 = Comments (site's .mobile-tabs).
+    // Mobile tab: 0 = Episodes, 1 = Comments (site's .mobile-tabs, lg:hidden).
     var tab by remember { mutableIntStateOf(0) }
 
     val activity = context as? android.app.Activity
@@ -126,7 +139,7 @@ fun WatchScreen(
             .background(theme.surface)
     ) {
         if (state.loading) {
-            LoadingSpinner()
+            WatchSkeleton(isWide = isWide)
             return@Column
         }
 
@@ -140,239 +153,566 @@ fun WatchScreen(
             return@Column
         }
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            // Site: .watch-layout pt-20 lg:pt-23 — clears the fixed top nav.
-            contentPadding = PaddingValues(top = 64.dp),
-        ) {
-            // ── Player (site: player-glass rounded-2xl, 16:9) ──────────────
-            item(key = "player") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .background(Color.Black)
-                ) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            PlayerView(ctx).apply {
-                                this.player = player
-                                useController = true
-                                controllerAutoShow = true
-                                controllerHideOnTouch = true
-                                setShowNextButton(true)
-                                setShowPreviousButton(true)
-                            }
-                        },
-                    )
-                    if (state.streamLoading) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            strokeWidth = 2.dp,
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .size(32.dp),
-                        )
-                    }
-                }
-            }
-
-            // ── Meta row: EP chip + views + actions ────────────────────────
-            item(key = "meta") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        // EP chip — site: rounded-xl border-white/6 bg-white/3 px-4 py-1.5.
-                        Text(
-                            text = "EP ${state.episode}",
-                            style = WebTextStyles.base,
-                            color = theme.fg,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0x08FFFFFF))
-                                .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
-                                .padding(horizontal = 16.dp, vertical = 6.dp),
-                        )
-                        state.viewCount?.let { vc ->
-                            Text(
-                                text = "%,d views".format(vc),
-                                style = WebTextStyles.xs,
-                                color = Color(0xFF71717A),
-                            )
-                        }
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        // Prev / Next episode (site: player control bar arrows).
-                        EpisodeNavButton(
-                            label = "Prev",
-                            enabled = state.episode > 1,
-                            onClick = { viewModel.switchEpisode(state.episode - 1) },
-                        )
-                        EpisodeNavButton(
-                            label = "Next",
-                            enabled = state.episode < state.totalEpisodes,
-                            onClick = { viewModel.switchEpisode(state.episode + 1) },
-                        )
-                        // Refresh stream (re-resolve sources for this episode).
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(Color(0x08FFFFFF))
-                                .clickable { viewModel.reloadStream() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = "Reload",
-                                tint = theme.fgMuted,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // ── Server panel (site: rounded-2xl border bg-white/3 p-3) ──────
-            item(key = "servers") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0x08FFFFFF))
-                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
-                        .padding(12.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                    ) {
-                        Text(
-                            text = "Servers (${state.servers.size.coerceAtLeast(1)})",
-                            style = WebTextStyles.base,
-                            color = theme.fg,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        // SUB / DUB segmented (site: btn-xs, active bg-action).
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0x14FFFFFF))
-                                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(8.dp)),
-                        ) {
-                            LangChip(
-                                label = "SUB",
-                                active = state.streamLang == "sub",
-                                onClick = { viewModel.setStreamLang("sub") },
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .width(1.dp)
-                                    .height(20.dp)
-                                    .background(Color(0x14FFFFFF))
-                            )
-                            LangChip(
-                                label = "DUB",
-                                active = state.streamLang == "dub",
-                                onClick = { viewModel.setStreamLang("dub") },
-                            )
-                        }
-                    }
-                    // Server chips (site: flex-wrap gap-2 rounded-lg bg-white/5).
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        val serverList = state.servers.ifEmpty { listOf(state.streamServer) }
-                        serverList.take(4).forEach { server ->
-                            val active = server == state.streamServer
-                            Text(
-                                text = server,
-                                style = WebTextStyles.xs,
-                                color = if (active) theme.actionFg else Color(0xFFA1A1AA),
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (active) theme.action else Color(0x0DFFFFFF))
-                                    .clickable { viewModel.setStreamServer(server) }
-                                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // ── Mobile tabs (site: Episodes | Comments) ─────────────────────
-            item(key = "tabs") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0x08FFFFFF))
-                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    TabChip(
-                        icon = Icons.Default.List,
-                        label = "Episodes",
-                        count = state.episodes.size,
-                        active = tab == 0,
-                        onClick = { tab = 0 },
-                        modifier = Modifier.weight(1f),
-                    )
-                    TabChip(
-                        icon = Icons.Default.ChatBubble,
-                        label = "Comments",
-                        count = state.comments.total,
-                        active = tab == 1,
-                        onClick = { tab = 1 },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-
-            if (tab == 0) {
-                // ── Episode rows (site: h-76, active state ring) ────────────
-                items(state.episodes, key = { it.number }) { ep ->
-                    EpisodeRow(
-                        ep = ep,
-                        active = ep.number == state.episode,
-                        onClick = { viewModel.switchEpisode(ep.number) },
-                    )
-                }
-            } else {
-                // ── Comments ────────────────────────────────────────────────
-                item(key = "comments") {
-                    CommentsSection(
-                        state = state.comments,
-                        episode = state.episode,
-                        onRefresh = viewModel::refreshComments,
-                    )
-                }
-            }
-
-            item(key = "bottom-space") { Spacer(Modifier.height(96.dp)) }
+        if (isWide) {
+            WatchWideLayout(
+                state = state,
+                viewModel = viewModel,
+                player = player,
+            )
+        } else {
+            WatchMobileLayout(
+                state = state,
+                viewModel = viewModel,
+                player = player,
+                tab = tab,
+                onTabChange = { tab = it },
+            )
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+//  Mobile — single scrolling column (site's stacked grid areas)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WatchMobileLayout(
+    state: WatchUiState,
+    viewModel: WatchViewModel,
+    player: androidx.media3.exoplayer.ExoPlayer,
+    tab: Int,
+    onTabChange: (Int) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        // Site: .watch-layout pt-20 lg:pt-23 — clears the fixed top nav.
+        contentPadding = PaddingValues(top = 64.dp),
+    ) {
+        item(key = "player") { PlayerStage(state = state, viewModel = viewModel, player = player) }
+        item(key = "notice-meta") {
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                ServerNotice()
+                Spacer(Modifier.height(12.dp))
+                MetaRow(state = state, viewModel = viewModel)
+            }
+        }
+        item(key = "servers") { ServerPanel(state = state, viewModel = viewModel) }
+        item(key = "tabs") { MobileTabs(state = state, tab = tab, onTabChange = onTabChange) }
+
+        if (tab == 0) {
+            items(state.episodes, key = { it.number }) { ep ->
+                EpisodeRow(
+                    ep = ep,
+                    active = ep.number == state.episode,
+                    onClick = { viewModel.switchEpisode(ep.number) },
+                )
+            }
+        } else {
+            item(key = "comments") {
+                CommentsSection(
+                    state = state.comments,
+                    episode = state.episode,
+                    onRefresh = viewModel::refreshComments,
+                )
+            }
+        }
+
+        item(key = "bottom-space") { Spacer(Modifier.height(96.dp)) }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Wide — site grid: player column (1fr) + episodes side panel (28-35%)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WatchWideLayout(
+    state: WatchUiState,
+    viewModel: WatchViewModel,
+    player: androidx.media3.exoplayer.ExoPlayer,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 72.dp, start = 16.dp, end = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),   // site: column-gap 1.25rem
+    ) {
+        // Left column — stage + meta + comments (site: stage/lower areas).
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+        ) {
+            PlayerStage(state = state, viewModel = viewModel, player = player)
+            ServerNotice()
+            Spacer(Modifier.height(12.dp))
+            MetaRow(state = state, viewModel = viewModel, horizontalPadding = PaddingValues(0.dp))
+            ServerPanel(state = state, viewModel = viewModel, horizontalPadding = PaddingValues(0.dp))
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = "Comments",
+                style = WebTextStyles.titleSection,
+                color = LocalAnikageTheme.current.fg,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            CommentsSection(
+                state = state.comments,
+                episode = state.episode,
+                onRefresh = viewModel::refreshComments,
+                horizontalPadding = PaddingValues(0.dp),
+            )
+            Spacer(Modifier.height(48.dp))
+        }
+
+        // Side panel — episode list (site: wl-side, w-35%→28%).
+        Column(
+            modifier = Modifier
+                .width(340.dp)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Episodes",
+                    style = WebTextStyles.titleSection,
+                    color = LocalAnikageTheme.current.fg,
+                )
+                Text(
+                    text = "${state.episodes.size}",
+                    style = WebTextStyles.xs,
+                    color = LocalAnikageTheme.current.fgMuted,
+                )
+            }
+            state.episodes.forEach { ep ->
+                EpisodeRow(
+                    ep = ep,
+                    active = ep.number == state.episode,
+                    onClick = { viewModel.switchEpisode(ep.number) },
+                    horizontalPadding = PaddingValues(0.dp),
+                )
+            }
+            if (state.episodes.isEmpty()) {
+                Text(
+                    text = "Episode list unavailable.",
+                    style = WebTextStyles.sm,
+                    color = LocalAnikageTheme.current.fgMuted,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+            Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Player stage — player-glass rounded-2xl + ambient blur glow (site exact)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun PlayerStage(
+    state: WatchUiState,
+    viewModel: WatchViewModel,
+    player: androidx.media3.exoplayer.ExoPlayer,
+) {
+    val ambientUrl = state.episodes.firstOrNull { it.number == state.episode }?.thumbnail
+        ?: state.details?.bannerImage
+        ?: state.details?.coverImage?.best()
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 12.dp),        // site: player-glass mb-3
+    ) {
+        // Ambient glow — site: .ambient-canvas blur(80px) brightness(.7) opacity(.45)
+        // behind the player. Modifier.blur is a no-op below API 31 (graceful).
+        if (ambientUrl != null && state.streamUrl != null) {
+            AsyncImage(
+                model = ambientUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .matchParentSize()
+                    .blur(60.dp)
+                    .alpha(0.45f),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.Black)
+                .border(BorderStroke(1.dp, Color(0x1AFFFFFF)), RoundedCornerShape(16.dp)),
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        this.player = player
+                        useController = true
+                        controllerAutoShow = true
+                        controllerHideOnTouch = true
+                        setShowNextButton(true)
+                        setShowPreviousButton(true)
+                    }
+                },
+            )
+            if (state.streamLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x66000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
+            }
+            // In-player failure — surface with a retry action (never silent).
+            if (state.playbackError != null && !state.streamLoading) {
+                PlayerErrorOverlay(
+                    message = state.playbackError ?: "",
+                    onReload = { viewModel.reloadStream() },
+                )
+            }
+        }
+    }
+}
+
+/** Overlay shown inside the player when ExoPlayer itself errored. */
+@Composable
+private fun PlayerErrorOverlay(message: String, onReload: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xB3000000))
+            .padding(20.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            Icons.Default.Warning,
+            contentDescription = null,
+            tint = Color(0xFFFBBF24),
+            modifier = Modifier.size(28.dp),
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = message,
+            style = WebTextStyles.sm,
+            color = Color(0xFFD4D4D8),
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(14.dp))
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.White)
+                .clickable(onClick = onReload)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = null,
+                tint = Color.Black,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = "Reload stream",
+                style = WebTextStyles.xs,
+                color = Color.Black,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Meta row + site's server notice
+// ---------------------------------------------------------------------------
+
+/** Site: rounded-xl bg-red-500/30 px-3 py-2 text-sm + flag icon notice. */
+@Composable
+private fun ServerNotice(modifier: Modifier = Modifier) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x4DEF4444))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Icon(
+            Icons.Default.Warning,
+            contentDescription = null,
+            tint = Color(0xFFFCA5A5),
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = "If the current server doesn't work, feel free to try the other available servers.",
+            style = WebTextStyles.sm,
+            color = Color(0xFFFEE2E2),
+        )
+    }
+}
+
+@Composable
+private fun MetaRow(
+    state: WatchUiState,
+    viewModel: WatchViewModel,
+    horizontalPadding: PaddingValues = PaddingValues(horizontal = 0.dp),
+) {
+    val theme = LocalAnikageTheme.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontalPadding)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            // EP chip — site: rounded-xl border-white/6 bg-white/3 px-4 py-1.5.
+            Text(
+                text = "EP ${state.episode}",
+                style = WebTextStyles.base,
+                color = theme.fg,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x08FFFFFF))
+                    .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+            state.viewCount?.let { vc ->
+                Text(
+                    text = "%,d views".format(vc),
+                    style = WebTextStyles.xs,
+                    color = Color(0xFF71717A),
+                )
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Prev / Next episode (site: player control bar arrows).
+            EpisodeNavButton(
+                label = "Prev",
+                enabled = state.episode > 1,
+                onClick = { viewModel.switchEpisode(state.episode - 1) },
+            )
+            EpisodeNavButton(
+                label = "Next",
+                enabled = state.episode < state.totalEpisodes,
+                onClick = { viewModel.switchEpisode(state.episode + 1) },
+            )
+            // Refresh stream (re-resolve sources for this episode).
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x08FFFFFF))
+                    .clickable { viewModel.reloadStream() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Reload",
+                    tint = theme.fgMuted,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Server panel — chips gated by subType support (site's server selector)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ServerPanel(
+    state: WatchUiState,
+    viewModel: WatchViewModel,
+    horizontalPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
+) {
+    val theme = LocalAnikageTheme.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontalPadding)
+            .padding(bottom = 12.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0x08FFFFFF))
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
+            .padding(12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+        ) {
+            Text(
+                text = "Servers (${state.availableServers.size.coerceAtLeast(1)})",
+                style = WebTextStyles.base,
+                color = theme.fg,
+                fontWeight = FontWeight.SemiBold,
+            )
+            // SUB / DUB segmented (site: btn-xs, active bg-action).
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0x14FFFFFF))
+                    .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(8.dp)),
+            ) {
+                LangChip(
+                    label = "SUB",
+                    active = state.streamLang == "sub",
+                    onClick = { viewModel.setStreamLang("sub") },
+                )
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(20.dp)
+                        .background(Color(0x14FFFFFF))
+                )
+                LangChip(
+                    label = "DUB",
+                    active = state.streamLang == "dub",
+                    onClick = { viewModel.setStreamLang("dub") },
+                )
+            }
+        }
+        // Stream resolution failure — actionable message (site shows the
+        // red notice above; we add the concrete reason here).
+        state.streamError?.let { err ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0x1AEF4444))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = Color(0xFFFCA5A5),
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = err,
+                    style = WebTextStyles.xs,
+                    color = Color(0xFFFEE2E2),
+                )
+            }
+        }
+        // Server chips (site: flex-wrap gap-2 rounded-lg bg-white/5). Chips
+        // are REAL servers from the servers endpoint; unavailable ones (e.g.
+        // Neko has no dub) render disabled instead of being hidden.
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val serverList = if (state.servers.isEmpty()) {
+                listOf(StreamServer(state.streamServer, state.streamServer, true, true, true))
+            } else {
+                state.servers
+            }
+            items(serverList, key = { it.id }) { server ->
+                val langSupported = if (state.streamLang == "dub") server.supportsDub else server.supportsSub
+                val active = server.name.equals(state.streamServer, ignoreCase = true) ||
+                    server.id.equals(state.streamServer, ignoreCase = true)
+                val enabled = langSupported
+                Text(
+                    text = server.name,
+                    style = WebTextStyles.xs,
+                    color = when {
+                        active -> theme.actionFg
+                        enabled -> Color(0xFFA1A1AA)
+                        else -> Color(0x50A1A1AA)     // disabled: 30% alpha
+                    },
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            when {
+                                active -> theme.action
+                                enabled -> Color(0x0DFFFFFF)
+                                else -> Color(0x05FFFFFF)
+                            }
+                        )
+                        .clickable(enabled = enabled) { viewModel.setStreamServer(server.name) }
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Mobile tabs (site: .wl-tabs lg:hidden)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun MobileTabs(
+    state: WatchUiState,
+    tab: Int,
+    onTabChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x08FFFFFF))
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        TabChip(
+            icon = Icons.Default.List,
+            label = "Episodes",
+            count = state.episodes.size,
+            active = tab == 0,
+            onClick = { onTabChange(0) },
+            modifier = Modifier.weight(1f),
+        )
+        TabChip(
+            icon = Icons.Default.ChatBubble,
+            label = "Comments",
+            count = state.comments.total,
+            active = tab == 1,
+            onClick = { onTabChange(1) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Primitives
+// ---------------------------------------------------------------------------
 
 /** Prev/Next episode chip — site player control arrows, pill styling. */
 @Composable
@@ -484,12 +824,14 @@ private fun EpisodeRow(
     ep: EpisodeItem,
     active: Boolean,
     onClick: () -> Unit,
+    horizontalPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
 ) {
     val theme = LocalAnikageTheme.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontalPadding)
+            .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(if (active) Color(0x14FFFFFF) else Color.Transparent)
             .border(
@@ -586,12 +928,13 @@ private fun CommentsSection(
     state: CommentsUiState,
     episode: Int,
     onRefresh: () -> Unit,
+    horizontalPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
 ) {
     val theme = LocalAnikageTheme.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
+            .padding(horizontalPadding),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // Header card (site: rounded-xl border-white/8 bg-white/[0.02]).
@@ -637,17 +980,36 @@ private fun CommentsSection(
                     )
                 }
             }
-            Text(
-                text = "EP $episode",
-                style = WebTextStyles.xs,
-                color = Color(0xFFD4D4D8),
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(Color(0x08FFFFFF))
-                    .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(50))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "EP $episode",
+                    style = WebTextStyles.xs,
+                    color = Color(0xFFD4D4D8),
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0x08FFFFFF))
+                        .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(50))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onRefresh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Refresh comments",
+                        tint = Color(0xFF71717A),
+                        modifier = Modifier.size(13.dp),
+                    )
+                }
+            }
         }
 
         if (state.loading) {
@@ -733,5 +1095,79 @@ private fun relativeTime(iso: String?): String {
         }
     } catch (_: Exception) {
         ""
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Loading skeleton — site: animate-pulse surface-card blocks in the exact
+//  watch-page shape (player 16:9, notice, meta, server panel, rows).
+//  Replaces the old black screen + spinner ("small dot") load state.
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WatchSkeleton(isWide: Boolean) {
+    val theme = LocalAnikageTheme.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(theme.surface)
+            .padding(top = 64.dp),
+    ) {
+        // Player block.
+        SkeletonBlock(
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f),
+            corner = 16.dp,
+        )
+        Spacer(Modifier.height(12.dp))
+        // Notice + meta row.
+        SkeletonBlock(
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .height(36.dp),
+            corner = 12.dp,
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            SkeletonBlock(modifier = Modifier.width(90.dp).height(32.dp), corner = 12.dp)
+            SkeletonBlock(modifier = Modifier.width(150.dp).height(30.dp), corner = 10.dp)
+        }
+        Spacer(Modifier.height(12.dp))
+        // Server panel.
+        SkeletonBlock(
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .height(96.dp),
+            corner = 16.dp,
+        )
+        Spacer(Modifier.height(12.dp))
+        // Tabs.
+        SkeletonBlock(
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .height(44.dp),
+            corner = 12.dp,
+        )
+        Spacer(Modifier.height(12.dp))
+        // Episode rows.
+        repeat(if (isWide) 2 else 3) {
+            SkeletonBlock(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .fillMaxWidth()
+                    .height(92.dp),
+                corner = 12.dp,
+            )
+        }
     }
 }

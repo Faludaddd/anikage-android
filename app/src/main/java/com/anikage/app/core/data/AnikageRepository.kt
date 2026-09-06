@@ -8,6 +8,8 @@ import com.anikage.app.core.data.api.AnikageApi
 import com.anikage.app.core.data.api.AnikageBrowseResponse
 import com.anikage.app.core.data.api.AnikageComment
 import com.anikage.app.core.data.api.AnikageEpisode
+import com.anikage.app.core.data.api.AnikageMusicAnime
+import com.anikage.app.core.data.api.AnikageServer
 import com.anikage.app.core.data.api.AnikageSourcesResponse
 import com.anikage.app.core.data.db.AnikageDatabase
 import com.anikage.app.core.data.db.AnimeCacheEntity
@@ -473,7 +475,15 @@ class AnikageRepository private constructor(
     // -------------------------------------------------------------------------
 
     suspend fun scheduleWeek(
-        startAt: Long = System.currentTimeMillis() / 1000,
+        // Start at TODAY'S MIDNIGHT (not "now") so today's already-aired
+        // episodes appear with the site's "Aired" badge instead of dropping.
+        startAt: Long = run {
+            val cal = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+            }
+            cal.timeInMillis / 1000
+        },
         forceRefresh: Boolean = false,
     ): Result<List<AiringSchedule>> =
         singleFlight("anikage:schedule:$startAt", TTL_LONG, forceRefresh) { fetchScheduleWeek(startAt) }
@@ -610,31 +620,54 @@ class AnikageRepository private constructor(
         return api.resolveStreamUrl(token)
     }
 
-    /** Server list for an episode (site's "Servers" panel). TTL 60s. */
-    suspend fun anikageServers(slug: String, episode: Int): Result<List<String>> =
+    /**
+     * Playback servers for an episode — the raw server list (provider ids +
+     * subTypes) so the watch screen can disable servers that don't offer the
+     * current SUB/DUB language, exactly like the site's server panel.
+     */
+    suspend fun anikageServers(slug: String, episode: Int): Result<List<AnikageServer>> =
         singleFlight("anikage:servers:$slug:$episode", TTL_LIST) {
             val api = anikage
                 ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
             try {
                 val response = api.servers(slug, episode)
-                val names = response.servers.map { serverName(it.providerId) }.distinct()
-                Result.success(names)
+                Result.success(response.servers)
             } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Servers failed for $slug ep $episode", e)
                 Result.failure(e)
             }
         }
 
-    /** Provider id → display name (site shows Neko / Miko / Wave / Koto …). */
-    private fun serverName(providerId: String): String = when (providerId.lowercase()) {
-        "koto" -> "Koto"
-        "kiwi" -> "Kiwi"
-        "neko" -> "Neko"
-        "megg" -> "Megg"
-        "dib" -> "Dib"
-        "wave" -> "Wave"
-        "zen" -> "Zen"
-        else -> providerId.replaceFirstChar { it.uppercase() }
-    }
+    // ---------------------------------------------------------------------
+    //  Music — the site's music tab (/api/animethemes proxy)
+    // ---------------------------------------------------------------------
+
+    /** Search anime by title -> themes (song titles) + cover art. */
+    suspend fun musicSearch(query: String): Result<List<AnikageMusicAnime>> =
+        singleFlight("anikage:music:$query", TTL_COMMENTS) {
+            val api = anikage
+                ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
+            try {
+                val response = api.musicSearch(query)
+                Result.success(response.search.anime)
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.NETWORK, "Music search failed for '$query'", e)
+                Result.failure(e)
+            }
+        }
+
+    /** Full theme set for one anime (videos + audio links + AniList id). */
+    suspend fun musicAnime(slug: String): Result<AnikageMusicAnime> =
+        singleFlight("anikage:music-anime:$slug", TTL_STREAM) {
+            val api = anikage
+                ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
+            try {
+                Result.success(api.musicAnime(slug))
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.NETWORK, "Music themes failed for $slug", e)
+                Result.failure(e)
+            }
+        }
 
     /** Comments for an episode. TTL 15s so a re-open refreshes but rapid switches don't refetch. */
     suspend fun anikageComments(
@@ -743,6 +776,7 @@ class AnikageRepository private constructor(
 
 private fun com.anikage.app.core.data.api.AnikageMedia.toAnime() = Anime(
     id = anilistId ?: 0,
+    slug = slug,
     title = com.anikage.app.core.data.model.AnimeTitle(
         romaji = title.romaji,
         english = title.english,

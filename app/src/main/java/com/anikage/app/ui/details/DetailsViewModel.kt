@@ -20,6 +20,9 @@ data class DetailsUiState(
     val episodes: List<EpisodeUi> = emptyList(),
     /** True when [episodes] came from the Anikage episodes API (real titles + thumbnails). */
     val realEpisodes: Boolean = false,
+    /** Anikage catalogue slug — passed to the watch screen so streaming
+     *  sources load without a title search. */
+    val slug: String? = null,
 )
 
 /** Episode info for the episode list. */
@@ -70,6 +73,7 @@ class DetailsViewModel(
     private suspend fun loadRealEpisodes(details: AnimeDetails) {
         val slug = repo.resolveSlug(animeId, details.title.english, details.title.romaji)
             ?: return
+        _state.value = _state.value.copy(slug = slug)
         repo.anikageEpisodes(slug).onSuccess { eps ->
             if (eps.isNotEmpty()) {
                 // Guard: duplicate episode numbers would collide as lazy-list

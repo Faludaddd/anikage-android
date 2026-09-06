@@ -29,8 +29,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -281,10 +279,9 @@ private fun ToggleRow(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     val theme = LocalAnikageTheme.current
-    val context = LocalContext.current
     SettingsCard {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Column(modifier = Modifier.weight(1f).let { Modifier }) {
+            Column(modifier = Modifier) {
                 Text(
                     text = title,
                     style = WebTextStyles.base,
@@ -301,18 +298,14 @@ private fun ToggleRow(
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Spacer(Modifier.weight(1f))
-                Switch(
+                // Site toggle: ON = action track + dark surface knob (never
+                // an all-white blob), OFF = white/10 track + zinc-500 knob.
+                com.anikage.app.ui.components.SiteSwitch(
                     checked = checked,
-                    onCheckedChange = { on -> onCheckedChange(on); },
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = theme.action,
-                        checkedThumbColor = Color.White,
-                        uncheckedTrackColor = Color(0xFF3F3F46),
-                        uncheckedThumbColor = Color(0xFFA1A1AA),
-                    ),
+                    onCheckedChange = onCheckedChange,
                 )
             }
         }

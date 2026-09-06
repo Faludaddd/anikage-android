@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -61,10 +60,11 @@ import com.anikage.app.core.data.model.AnimeDetails
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.components.ErrorOrEmptyState
-import com.anikage.app.ui.components.LoadingSpinner
+import com.anikage.app.ui.components.LucideStarFilled
 import com.anikage.app.ui.components.SectionBadge
 import com.anikage.app.ui.components.SectionHeader
 import com.anikage.app.ui.components.SiteCarouselRow
+import com.anikage.app.ui.components.SkeletonBlock
 
 /**
  * DETAILS — 1:1 port of anikage.cc/anime/info/{id} (mobile).
@@ -86,7 +86,7 @@ fun DetailsScreen(
     animeId: Int,
     onBackClick: () -> Unit,
     onAnimeClick: (Anime) -> Unit,
-    onWatchClick: (Int, Int) -> Unit,
+    onWatchClick: (Int, Int, String?) -> Unit,
 ) {
     val context = LocalContext.current
     val repo = remember { AnikageRepository.get(context) }
@@ -97,9 +97,10 @@ fun DetailsScreen(
     val theme = LocalAnikageTheme.current
 
     if (state.loading) {
-        Box(modifier = Modifier.fillMaxSize().background(theme.surface)) {
-            LoadingSpinner(modifier = Modifier.fillMaxSize())
-        }
+        // Branded loading state — the site pulses surface-card placeholders
+        // (animate-pulse bg-surface-card) in every image slot, never a bare
+        // spinner on black.
+        DetailsSkeleton()
         return
     }
 
@@ -209,10 +210,9 @@ fun DetailsScreen(
                         details.averageScore?.let { score ->
                             DetailChip(
                                 leading = {
-                                    Icon(
-                                        Icons.Default.Star,
-                                        contentDescription = null,
-                                        tint = Color(0xFFE8BE30),  // amber-400
+                                    // Site: lucide-star h-3.5 fill-amber-400/90.
+                                    LucideStarFilled(
+                                        tint = Color(0xE6FBBF24),
                                         modifier = Modifier.size(14.dp),
                                     )
                                 },
@@ -253,7 +253,7 @@ fun DetailsScreen(
                                 .shadow(8.dp, RoundedCornerShape(12.dp), spotColor = Color(0x4D000000))
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(theme.action)
-                                .clickable { onWatchClick(details.id, 1) }
+                                .clickable { onWatchClick(details.id, 1, state.slug) }
                                 .height(36.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -261,7 +261,7 @@ fun DetailsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 modifier = Modifier
-                                    .clickable { onWatchClick(details.id, 1) }
+                                    .clickable { onWatchClick(details.id, 1, state.slug) }
                                     .padding(start = 16.dp, end = 14.dp)
                             ) {
                                 Icon(
@@ -426,7 +426,7 @@ fun DetailsScreen(
                 EpisodeRow(
                     ep = ep,
                     active = false,
-                    onClick = { onWatchClick(details.id, ep.number) },
+                    onClick = { onWatchClick(details.id, ep.number, state.slug) },
                 )
             }
         }
@@ -658,3 +658,82 @@ private fun stripHtml(html: String): String =
         .replace(Regex("<[^>]*>"), "")
         .replace("(Source: [^)]+\\)?\\s*$".toRegex(), "")
         .trim()
+
+/**
+ * Branded loading state — mirrors the details page structure with pulsing
+ * surface-card placeholders (site: `animate-pulse bg-surface-card`), so the
+ * transition into the page is smooth instead of a black screen + spinner.
+ */
+@Composable
+private fun DetailsSkeleton() {
+    val theme = LocalAnikageTheme.current
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(theme.surface),
+    ) {
+        // Banner block.
+        SkeletonBlock(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(350.dp),
+            corner = 0.dp,
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .offset(y = (-122).dp)
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp),
+        ) {
+            // Poster.
+            SkeletonBlock(
+                modifier = Modifier
+                    .width(170.dp)
+                    .height(245.dp),
+            )
+            Spacer(Modifier.height(16.dp))
+            // Title bars.
+            SkeletonBlock(
+                modifier = Modifier
+                    .width(220.dp)
+                    .height(26.dp),
+                corner = 8.dp,
+            )
+            Spacer(Modifier.height(10.dp))
+            SkeletonBlock(
+                modifier = Modifier
+                    .width(140.dp)
+                    .height(14.dp),
+                corner = 7.dp,
+            )
+            Spacer(Modifier.height(14.dp))
+            // Meta chips row.
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SkeletonBlock(modifier = Modifier.width(64.dp).height(28.dp), corner = 8.dp)
+                SkeletonBlock(modifier = Modifier.width(84.dp).height(28.dp), corner = 8.dp)
+                SkeletonBlock(modifier = Modifier.width(110.dp).height(28.dp), corner = 8.dp)
+            }
+            Spacer(Modifier.height(18.dp))
+            // Play Now button.
+            SkeletonBlock(
+                modifier = Modifier.width(180.dp).height(36.dp),
+                corner = 12.dp,
+            )
+            Spacer(Modifier.height(28.dp))
+        }
+        // Synopsis card.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+        ) {
+            SkeletonBlock(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp),
+                corner = 16.dp,
+            )
+        }
+    }
+}

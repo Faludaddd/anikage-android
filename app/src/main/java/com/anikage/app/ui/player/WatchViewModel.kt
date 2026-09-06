@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -14,6 +15,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.anikage.app.Config
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.api.AnikageComment
+import com.anikage.app.core.data.api.AnikageServer
 import com.anikage.app.core.data.model.AnimeDetails
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
@@ -40,6 +42,15 @@ data class SubtitleTrack(
     val isDefault: Boolean,
 )
 
+/** A playback server + what it can serve (from the servers endpoint). */
+data class StreamServer(
+    val id: String,
+    val name: String,
+    val supportsSub: Boolean,
+    val supportsDub: Boolean,
+    val isDefault: Boolean,
+)
+
 data class CommentsUiState(
     val loading: Boolean = false,
     val comments: List<AnikageComment> = emptyList(),
@@ -56,7 +67,10 @@ data class WatchUiState(
     val subtitles: List<SubtitleTrack> = emptyList(),
     val qualityOptions: List<String> = emptyList(),
     val streamLoading: Boolean = false,
+    /** Source-resolution failure — shown with a retry + server hint. */
     val streamError: String? = null,
+    /** In-player failure (ExoPlayer error) — shown on the player surface. */
+    val playbackError: String? = null,
     val error: String? = null,
     val savedPositionMs: Long = 0L,
     val title: String = "",
@@ -65,20 +79,31 @@ data class WatchUiState(
     val comments: CommentsUiState = CommentsUiState(),
     /** Site's server panel state. */
     val streamLang: String = Config.DEFAULT_STREAM_LANG,
-    val streamServer: String = "Koto",
-    val servers: List<String> = emptyList(),
-)
+    val streamServer: String = Config.DEFAULT_STREAM_PROVIDER,
+    val servers: List<StreamServer> = emptyList(),
+) {
+    /** Servers that can serve the current SUB/DUB selection. */
+    val availableServers: List<StreamServer>
+        get() = servers.filter {
+            if (streamLang == "dub") it.supportsDub else it.supportsSub
+        }
+}
 
 /**
  * Watch screen data + ExoPlayer wiring.
  *
- * Fix history (v1.5.0 regressions this class addresses):
- *  - The anime details are fetched exactly ONCE per id (the repository's
- *    single-flight dedups across the Details screen and this screen).
- *  - Switching episodes does NOT refetch details — only the new episode's
- *    sources + comments are loaded.
- *  - Real streams: Anikage sources -> HLS token -> og.bakayaro.live, played
- *    with the Referer/Origin headers the stream host requires.
+ * Streaming flow (mirrors anikage.cc exactly):
+ *   1. details (AniList id, deduped) — OR carried-in Anikage slug from the
+ *      originating screen (home/browse/schedule payloads already have it).
+ *   2. slug — used directly when known; only resolved by title-search as a
+ *      fallback (this was the reliability bug: searches can miss).
+ *   3. episodes -> {slug}/episodes (titles/thumbs/filler).
+ *   4. servers -> {slug}/episodes/{n}/servers (koto/kiwi/neko/zen + subTypes).
+ *   5. sources -> {slug}/episodes/{n}/sources?provider&lang -> HLS tokens.
+ *   6. token -> {PROXY}/m3u8/{token}, played with Referer/Origin headers.
+ *
+ * Every failure is surfaced (streamError / playbackError) so the user can
+ * retry or switch servers — never a silent black player.
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class WatchViewModel(
@@ -86,9 +111,12 @@ class WatchViewModel(
     private val repo: AnikageRepository,
     private val animeId: Int,
     initialEpisode: Int,
+    initialSlug: String? = null,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(WatchUiState(loading = true, episode = initialEpisode))
+    private val _state = MutableStateFlow(
+        WatchUiState(loading = true, episode = initialEpisode, slug = initialSlug?.takeIf { it.isNotBlank() }),
+    )
     val state: StateFlow<WatchUiState> = _state.asStateFlow()
 
     private var player: ExoPlayer? = null
@@ -107,6 +135,7 @@ class WatchViewModel(
         it.volume = com.anikage.app.core.settings.SettingsState.volume *
             if (com.anikage.app.core.settings.SettingsState.muted) 0f else 1f
         // Autonext — site: auto-play the next episode when this one ends.
+        // In-player failures surface as playbackError (retry / switch server).
         it.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED &&
@@ -118,6 +147,14 @@ class WatchViewModel(
                         switchEpisode(next)
                     }
                 }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                AppLogger.e(LogCategory.PLAYER, "Playback error (${error.errorCodeName})", error)
+                _state.value = _state.value.copy(
+                    playbackError = "Playback failed (${error.errorCodeName}). " +
+                        "Try another server or reload the stream.",
+                )
             }
         })
     }
@@ -168,30 +205,41 @@ class WatchViewModel(
                         episode = ep,
                         title = details.displayTitle(),
                     )
-                    // Slug + real episode metadata (non-fatal if unavailable).
-                    val slug = repo.resolveSlug(
-                        animeId,
-                        details.title.english,
-                        details.title.romaji,
-                    )
+                    // Slug: prefer the one carried in from the originating
+                    // screen (site payloads always have it); resolve by title
+                    // search only as a fallback.
+                    var slug = _state.value.slug
+                    if (slug == null) {
+                        slug = repo.resolveSlug(
+                            animeId,
+                            details.title.english,
+                            details.title.romaji,
+                        )
+                    } else {
+                        AppLogger.d(LogCategory.PLAYER, "Using carried-in slug '$slug' (no search needed)")
+                    }
                     if (slug != null) {
-                        _state.value = _state.value.copy(slug = slug)
-                        repo.anikageEpisodes(slug).onSuccess { eps ->
-                            if (eps.isNotEmpty()) {
-                                // Dedupe by number — lazy-list keys must be unique.
-                                val distinct = eps.distinctBy { it.number }
-                                _state.value = _state.value.copy(
-                                    episodes = distinct.map {
-                                        EpisodeItem(
-                                            number = it.number,
-                                            title = it.title?.takeIf { t -> t.isNotBlank() } ?: "Episode ${it.number}",
-                                            thumbnail = it.image,
-                                            isFiller = it.isFiller,
-                                            isRecap = it.isRecap,
-                                        )
-                                    },
-                                    totalEpisodes = maxOf(total, distinct.size),
-                                )
+                        if (_state.value.slug != slug) {
+                            _state.value = _state.value.copy(slug = slug)
+                        }
+                        launch {
+                            repo.anikageEpisodes(slug).onSuccess { eps ->
+                                if (eps.isNotEmpty()) {
+                                    // Dedupe by number — lazy-list keys must be unique.
+                                    val distinct = eps.distinctBy { it.number }
+                                    _state.value = _state.value.copy(
+                                        episodes = distinct.map {
+                                            EpisodeItem(
+                                                number = it.number,
+                                                title = it.title?.takeIf { t -> t.isNotBlank() } ?: "Episode ${it.number}",
+                                                thumbnail = it.image,
+                                                isFiller = it.isFiller,
+                                                isRecap = it.isRecap,
+                                            )
+                                        },
+                                        totalEpisodes = maxOf(total, distinct.size),
+                                    )
+                                }
                             }
                         }
                     }
@@ -211,13 +259,20 @@ class WatchViewModel(
     /** Load ONLY the per-episode bits: stream sources, view count, comments. */
     private fun loadEpisode(episode: Int) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(streamLoading = true, streamError = null)
+            _state.value = _state.value.copy(
+                streamLoading = true,
+                streamError = null,
+                playbackError = null,
+            )
             val slug = _state.value.slug
-            val settings = com.anikage.app.core.settings.SettingsState
+            val lang = _state.value.streamLang
+            val server = _state.value.streamServer
             var streamUrl: String? = null
             var subtitles: List<SubtitleTrack> = emptyList()
+            var failure: String? = null
+
             if (slug != null) {
-                repo.anikageSources(slug, episode, _state.value.streamServer.lowercase(), _state.value.streamLang)
+                repo.anikageSources(slug, episode, server.lowercase(), lang)
                     .onSuccess { response ->
                         val best = response.sources.firstOrNull { it.isM3U8 } ?: response.sources.firstOrNull()
                         streamUrl = best?.url?.let { token ->
@@ -239,19 +294,25 @@ class WatchViewModel(
                             )
                         }.filter { it.url.isNotBlank() }
                         if (streamUrl == null) {
-                            AppLogger.w(LogCategory.PLAYER, "No stream sources for $slug ep $episode")
+                            val langLabel = if (lang == "dub") "dub" else "sub"
+                            failure = "No $langLabel source on $server for this episode. " +
+                                "Try the other language or another server."
+                            AppLogger.w(LogCategory.PLAYER, "No stream sources for $slug ep $episode ($server/$lang)")
                         } else {
                             AppLogger.i(
                                 LogCategory.PLAYER,
-                                "Stream ready for episode $episode (${subtitles.size} subtitle track(s))",
+                                "Stream ready for episode $episode on $server/$lang (${subtitles.size} subtitle track(s))",
                             )
                         }
                     }
                     .onFailure { e ->
-                        AppLogger.w(LogCategory.PLAYER, "Sources failed for $slug ep $episode", e)
+                        AppLogger.w(LogCategory.PLAYER, "Sources failed for $slug ep $episode ($server/$lang)", e)
+                        failure = "$server couldn't provide this episode (${e.message ?: "network error"}). " +
+                            "Try another server below."
                     }
             } else {
                 AppLogger.w(LogCategory.PLAYER, "No Anikage slug — stream unavailable")
+                failure = "This anime isn't in the Anikage catalogue, so no stream is available."
             }
 
             val saved = repo.loadProgress(animeId, episode)?.positionMs ?: 0L
@@ -261,9 +322,9 @@ class WatchViewModel(
                 subtitles = subtitles,
                 savedPositionMs = saved,
                 streamLoading = false,
-                streamError = if (streamUrl == null) "No playable source was returned for this episode." else null,
+                streamError = failure,
             )
-            preparePlayer(episode)
+            if (streamUrl != null) preparePlayer(episode)
 
             if (slug != null) {
                 launch { repo.anikageViews(slug, episode)?.let { vc ->
@@ -272,9 +333,25 @@ class WatchViewModel(
                 launch {
                     repo.anikageServers(slug, episode).getOrNull()?.let { servers ->
                         if (servers.isNotEmpty()) {
+                            val models = servers.map { s ->
+                                StreamServer(
+                                    id = s.providerId,
+                                    name = displayServerName(s.providerId),
+                                    supportsSub = s.subTypes.isEmpty() || s.subTypes.contains("sub"),
+                                    supportsDub = s.subTypes.contains("dub"),
+                                    isDefault = s.default,
+                                )
+                            }.distinctBy { it.id }
+                            val currentValid = models.any {
+                                it.id.equals(server, ignoreCase = true) &&
+                                    (if (lang == "dub") it.supportsDub else it.supportsSub)
+                            }
+                            val fallback = models.firstOrNull {
+                                if (lang == "dub") it.supportsDub else it.supportsSub
+                            }
                             _state.value = _state.value.copy(
-                                servers = servers,
-                                streamServer = if (servers.contains(_state.value.streamServer)) _state.value.streamServer else servers.first(),
+                                servers = models,
+                                streamServer = if (currentValid) server else (fallback?.name ?: server),
                             )
                         }
                     }
@@ -286,6 +363,7 @@ class WatchViewModel(
                 repo.markRecentlyViewed(
                     com.anikage.app.core.data.model.Anime(
                         id = animeId,
+                        slug = _state.value.slug,
                         title = _state.value.details?.title ?: com.anikage.app.core.data.model.AnimeTitle(),
                         coverImage = _state.value.details?.coverImage
                             ?: com.anikage.app.core.data.model.CoverImage(),
@@ -295,6 +373,10 @@ class WatchViewModel(
             }
         }
     }
+
+    /** Provider id → display name (site shows Koto / Kiwi / Neko / Zen …). */
+    private fun displayServerName(providerId: String): String =
+        providerId.replaceFirstChar { it.uppercase() }
 
     /** Set the media item (with subtitle tracks + quality caps) and start it. */
     private fun preparePlayer(episode: Int) {
@@ -361,20 +443,20 @@ class WatchViewModel(
     /** Site's SUB/DUB toggle — reloads the current episode's stream. */
     fun setStreamLang(lang: String) {
         if (_state.value.streamLang == lang) return
-        _state.value = _state.value.copy(streamLang = lang, streamUrl = null)
+        _state.value = _state.value.copy(streamLang = lang, streamUrl = null, playbackError = null)
         loadEpisode(_state.value.episode)
     }
 
     /** Site's server-chip switch — reloads the current episode's stream. */
     fun setStreamServer(server: String) {
         if (_state.value.streamServer == server) return
-        _state.value = _state.value.copy(streamServer = server, streamUrl = null)
+        _state.value = _state.value.copy(streamServer = server, streamUrl = null, playbackError = null)
         loadEpisode(_state.value.episode)
     }
 
     /** Re-resolve the stream for the current episode (site's refresh button). */
     fun reloadStream() {
-        _state.value = _state.value.copy(streamUrl = null)
+        _state.value = _state.value.copy(streamUrl = null, playbackError = null, streamError = null)
         loadEpisode(_state.value.episode)
     }
 
@@ -430,8 +512,14 @@ class WatchViewModel(
     }
 
     companion object {
-        fun factory(app: Application, repo: AnikageRepository, animeId: Int, episode: Int) = viewModelFactory {
-            initializer { WatchViewModel(app, repo, animeId, episode) }
+        fun factory(
+            app: Application,
+            repo: AnikageRepository,
+            animeId: Int,
+            episode: Int,
+            slug: String? = null,
+        ) = viewModelFactory {
+            initializer { WatchViewModel(app, repo, animeId, episode, slug) }
         }
     }
 }
