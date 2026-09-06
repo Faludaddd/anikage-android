@@ -189,10 +189,16 @@ private fun HomeContent(
                             )
                         },
                     )
+                    // Site: flex flex-col gap-2 (8px) sm:gap-2.5 (10px).
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         val list = if (showMovies) feed.popularMovies else feed.top10
                         list.take(10).forEachIndexed { idx, anime ->
-                            Top10Row(rank = idx + 1, anime = anime, onClick = onAnimeClick)
+                            Top10Row(
+                                rank = idx + 1,
+                                anime = anime,
+                                onClick = onAnimeClick,
+                                isMovieRow = showMovies,
+                            )
                         }
                     }
                 }

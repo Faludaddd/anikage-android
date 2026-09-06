@@ -1,8 +1,13 @@
 package com.anikage.app.ui.components
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -181,10 +187,19 @@ fun SiteAnimeCard(
     val theme = LocalAnikageTheme.current
     val releasing = anime.status == "RELEASING"
     val airingEp = anime.nextAiringEpisode?.episode?.minus(1)?.takeIf { it > 0 }
+    // Site: .card-link:active { scale: .97 } — spring back on release.
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "cardPress",
+    )
     Column(
         modifier = modifier
             .width(cardWidth)
-            .clickable { onClick(anime) },
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clickable(interactionSource = interaction, indication = null) { onClick(anime) },
     ) {
         Box(
             modifier = Modifier
@@ -310,7 +325,8 @@ fun SiteCarouselRow(
             state = listState,
             // Site: container-custom max-width 96% ≈ 8px inset each side.
             contentPadding = PaddingValues(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            // Site: .card-link margin-right calc(4px*1.5) = 6px between cards.
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             items(items, key = { "${it.id}-${it.displayTitle()}" }) { anime ->
                 SiteAnimeCard(anime = anime, onClick = onClick, cardWidth = cardWidth)
@@ -370,29 +386,63 @@ fun SiteCarouselRow(
 }
 
 // ---------------------------------------------------------------------------
-//  Top 10 ranked row — site: poster 57x81 + "#1" 20px circle badge (overlap
-//  top-left) + title + `★ 9.1 • FALL • FINISHED` (text-xs zinc-500), 95px.
+//  Top 10 ranked row — 1:1 from the live DOM:
+//  div.group.relative.flex.items-center
+//    └ div.rounded-lg.border-white/6.bg-white/3.p-1.5.pr-3 (sm:rounded-xl p-2)
+//        ├ a h-[81px] w-[57px] (sm: 84x59)
+//        │   ├ .#N badge — abs -top-1 -left-1, size-5 rounded-full, bg=RANK
+//        │   │   color, text-2xs font-bold text-BLACK
+//        │   └ poster (rounded-md, object-cover)
+//        ├ column: title (text-base font-medium, line-clamp-2 leading-tight)
+//        │   + meta `★ 9.1 • FALL • FINISHED` (text-xs zinc-500)
+//        └ right (sm+): "TV Show" (text-sm font-semibold) + "28 ep"
+//            (text-xs zinc-500), min-w-100px
+//  Rank colors extracted per-rank from the site's inline styles.
 // ---------------------------------------------------------------------------
+
+/** Per-rank badge colors — exact inline values from the live site. */
+private val RankColors = listOf(
+    0xFFBBF1A1, 0xFFE48643, 0xFFE4C993, 0xFFE43550, 0xFFE4935D,
+    0xFFE45D86, 0xFFE49350, 0xFFE49350, 0xFFE4D650, 0xFF5DBBE4,
+)
+
+/** Popular Movies palette (site restarts the cycle for the movie rows). */
+private val MovieRankColors = listOf(
+    0xFF0DA1E4, 0xFF5DC9F1, 0xFFE45D5D, 0xFFF1C95D, 0xFFF1C9F1,
+    0xFF0DAEE4, 0xFF5DBBE4, 0xFFF19335, 0xFFE4935D, 0xFFE4C993,
+)
+
+fun top10RankColor(rank: Int, isMovieRow: Boolean = false): Color {
+    val palette = if (isMovieRow) MovieRankColors else RankColors
+    return Color(palette[(rank - 1).coerceIn(0, palette.size - 1)])
+}
 
 @Composable
 fun Top10Row(
     rank: Int,
     anime: Anime,
     onClick: (Anime) -> Unit,
+    isMovieRow: Boolean = false,
 ) {
     val theme = LocalAnikageTheme.current
+    val rankColor = top10RankColor(rank, isMovieRow)
+    // Site: container p-1.5 pr-3 → poster 57 + gap 8 + text + pr-12.
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(95.dp)
-            .clickable { onClick(anime) },
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0x08FFFFFF))            // bg-white/3
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(8.dp))  // border-white/6
+            .clickable { onClick(anime) }
+            .padding(horizontal = 6.dp, vertical = 6.dp)
+            .padding(end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         // Poster with rank badge overlapping the top-left corner.
         Box(
             modifier = Modifier
                 .width(57.dp)
-                .height(81.dp)
-                .align(Alignment.CenterVertically),
+                .height(81.dp),
         ) {
             Box(
                 modifier = Modifier
@@ -409,21 +459,21 @@ fun Top10Row(
                     )
                 }
             }
-            // Rank badge — 20x20 round, offset -4dp/-4dp from corner.
+            // Rank badge — site: -top-1 -left-1 size-5 rounded-full bg-[rank
+            // color] text-2xs font-bold text-black.
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset(x = (-4).dp, y = (-4).dp)
                     .size(20.dp)
                     .clip(CircleShape)
-                    .background(Color(0xE60A0A0A))
-                    .border(1.dp, Color(0x14FFFFFF), CircleShape),
+                    .background(rankColor),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = "#$rank",
                     style = WebTextStyles.xs2,
-                    color = Color.White,
+                    color = Color(0xFF0A0A0A),       // text-black
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -432,7 +482,6 @@ fun Top10Row(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .align(Alignment.CenterVertically)
                 .padding(start = 10.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
@@ -475,6 +524,38 @@ fun Top10Row(
                     MetaDot()
                     Text(
                         text = st.replace('_', ' '),
+                        style = WebTextStyles.xs,
+                        color = Color(0xFF71717A),
+                    )
+                }
+            }
+        }
+
+        // Right column (site sm+): format + episode count.
+        Column(
+            modifier = Modifier
+                .padding(start = 10.dp)
+                .align(Alignment.CenterVertically),
+            horizontalAlignment = Alignment.End,
+        ) {
+            val formatLabel = when (anime.format) {
+                "MOVIE" -> "Movie"
+                "TV", "TV_SHORT" -> "TV Show"
+                "OVA", "ONA" -> (anime.format ?: "")
+                else -> anime.format?.lowercase()?.replaceFirstChar { it.uppercase() } ?: ""
+            }
+            if (formatLabel.isNotBlank()) {
+                Text(
+                    text = formatLabel,
+                    style = WebTextStyles.sm,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            anime.episodes?.let { eps ->
+                if (eps > 0) {
+                    Text(
+                        text = "$eps ep",
                         style = WebTextStyles.xs,
                         color = Color(0xFF71717A),
                     )

@@ -7,13 +7,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
 import com.anikage.app.core.nav.AnikageApp
 import com.anikage.app.core.theme.AnikageTheme
 import com.anikage.app.core.theme.ThemeState
+import com.anikage.app.core.theme.WebTypeScale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,6 +31,9 @@ class MainActivity : ComponentActivity() {
             // Observes ThemeState.key — the theme switcher in Settings
             // recomposes the entire app with the new website theme tokens.
             AnikageTheme(themeKey = ThemeState.key) {
+                // Site's @media (width>=768px) type scale: tablet/TV gets the
+                // enlarged fixed rem values, phones get the fluid clamp base.
+                TypeScaleGate()
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
@@ -43,4 +49,10 @@ class MainActivity : ComponentActivity() {
         AppLogger.d(LogCategory.UI, "MainActivity.onDestroy")
         super.onDestroy()
     }
+}
+
+/** Flips [WebTypeScale] at the site's 768px CSS breakpoint. */
+@Composable
+private fun TypeScaleGate() {
+    WebTypeScale.wide = LocalConfiguration.current.screenWidthDp >= 768
 }
