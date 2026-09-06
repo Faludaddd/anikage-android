@@ -13,16 +13,21 @@ import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
 import com.anikage.app.core.nav.AnikageApp
 import com.anikage.app.core.theme.AnikageTheme
+import com.anikage.app.core.theme.ThemeState
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // Splash screen: shows briefly while Compose inflates.
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        // Restore the persisted website theme (like the site's localStorage).
+        ThemeState.init(this)
         AppLogger.d(LogCategory.UI, "MainActivity.onCreate")
 
         setContent {
-            AnikageTheme(darkTheme = Config.Theme.DEFAULT_DARK_MODE) {
+            // Observes ThemeState.key — the theme switcher in Settings
+            // recomposes the entire app with the new website theme tokens.
+            AnikageTheme(themeKey = ThemeState.key) {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()

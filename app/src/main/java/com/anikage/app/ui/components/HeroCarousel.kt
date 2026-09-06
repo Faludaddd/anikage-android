@@ -1,5 +1,8 @@
 package com.anikage.app.ui.components
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,28 +23,29 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -53,21 +58,31 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.anikage.app.Config
 import com.anikage.app.core.data.model.Anime
+import com.anikage.app.core.theme.LocalAnikageTheme
+import com.anikage.app.core.theme.WebTextStyles
 import kotlinx.coroutines.delay
 
 /**
- * Anikage-style hero carousel — full-bleed, gradient-overlayed, with logo
- * image + meta pills + genre chips + description + Watch Now/More info
- * buttons + progress dots + nav arrows.
+ * HERO CAROUSEL — 1:1 port of the Anikage website hero (`.hero-shell`).
  *
- * Real Anikage hero is:
- *   - h-[72vh] on mobile, h-[90vh] on tablet, h-screen on desktop
- *   - cover image with multi-direction gradients
- *   - bottom-left content: anime logo image (we use title text — we don't
- *     have anime logo images), meta pills row, genre chips, description
- *   - bottom-center: progress dots + slide counter + nav arrows
+ * Site structure (extracted from the live DOM):
+ *   section.hero-shell h-[72vh] (md:90vh, lg:screen)
+ *     ├─ img.hero-bg-layer  — TVDB series background artwork (spotlight.fanart)
+ *     ├─ .hero-gradients    — 3 stacked gradients:
+ *     │    bg-linear-to-t from-surface via-surface/30 to-surface/10
+ *     │    bg-linear-to-r from-surface/60 via-surface/30 to-transparent
+ *     │    top-1/4 bg-linear-to-b from-surface/40 to-transparent
+ *     ├─ .hero-content (container-custom, bottom-left, pb-16)
+ *     │    ├─ TVDB clearlogo img  max-h-[80px] md:max-h-[130px]
+ *     │    │   drop-shadow(0 4px 24px rgba(0,0,0,.8))
+ *     │    ├─ meta pills (score=yellow, year, episodes, format)
+ *     │    ├─ genre chips (border-white/10 bg-black/50)
+ *     │    ├─ synopsis line-clamp-2 text-base text-zinc-400
+ *     │    └─ Watch Now (btn-primary WHITE) + More Info (blur secondary)
+ *     └─ bottom bar: progress dots (w-4, active w-8 + animated fill),
+ *        "N/M" counter (text-xs white/35 tabular), blur arrow buttons
  *
- * Auto-advances every 7 seconds (matches Anikage behaviour).
+ * Auto-advance: 7s per slide, fill animates inside the active dot.
  */
 @Composable
 fun HeroCarousel(
@@ -77,26 +92,31 @@ fun HeroCarousel(
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
+    val theme = LocalAnikageTheme.current
     val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
-    // Match the website breakpoints: 72vh phone, 90vh tablet, full viewport
-    // desktop. The next rail is intentionally below the fold on large screens.
+    val isWide = configuration.screenWidthDp >= 600
+    // Site: h-[72vh] mobile · 90vh tablet · h-screen desktop.
     val heroHeight = when {
-        configuration.screenWidthDp >= 900 -> screenHeight
-        configuration.screenWidthDp >= 600 -> screenHeight * 0.90f
-        else -> screenHeight * 0.72f
+        configuration.screenWidthDp >= 900 -> configuration.screenHeightDp.dp
+        configuration.screenWidthDp >= 600 -> configuration.screenHeightDp.dp * 0.90f
+        else -> configuration.screenHeightDp.dp * 0.72f
     }
+    val slideMillis = 7000
 
-    var currentIndex by remember { mutableStateOf(0) }
+    var currentIndex by remember(items) { mutableIntStateOf(0) }
+    var progress by remember(items) { mutableFloatStateOf(0f) }
     val totalItems = items.size
-    val current = items[currentIndex]
+    val current = items[currentIndex.coerceIn(0, totalItems - 1)]
 
-    // Auto-advance
-    LaunchedEffect(totalItems) {
-        while (true) {
-            delay(7000)
-            currentIndex = (currentIndex + 1) % totalItems
+    // Auto-advance with progress fill (site animates the active dot's fill).
+    LaunchedEffect(currentIndex, totalItems) {
+        progress = 0f
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < slideMillis) {
+            delay(50)
+            progress = ((System.currentTimeMillis() - start).toFloat() / slideMillis).coerceIn(0f, 1f)
         }
+        if (totalItems > 1) currentIndex = (currentIndex + 1) % totalItems
     }
 
     Box(
@@ -104,203 +124,193 @@ fun HeroCarousel(
             .fillMaxWidth()
             .height(heroHeight)
     ) {
-        // Layer 0: cover image
+        // ── Layer 0: background artwork (TVDB fanart → AniList banner → cover)
         AsyncImage(
-            model = current.bannerImage ?: current.coverUrl(),
+            model = current.fanartUrl ?: current.bannerImage ?: current.coverUrl(),
             contentDescription = current.displayTitle(),
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Layer 1: gradients (matches Anikage's hero-gradients)
-        // - Bottom-up: from-surface via-surface/30 to-surface/10
-        // - Left-to-right: from-surface/60 via-surface/30 to-transparent
-        // - Top-down: from-surface/40 to-transparent (only top 1/4)
+        // ── Layer 1: gradient stack (exact site values)
+        // bottom-up: from-surface via-surface/30 to-surface/10
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        0.0f to Color.Transparent,
-                        0.5f to MaterialTheme.colorScheme.background.copy(alpha = 0.3f),
-                        1.0f to MaterialTheme.colorScheme.background,
+                        0.0f to theme.surface.copy(alpha = 0.10f),
+                        0.5f to theme.surface.copy(alpha = 0.30f),
+                        1.0f to theme.surface,
                     )
                 )
         )
+        // left-right: from-surface/60 via-surface/30 to-transparent
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.horizontalGradient(
-                        0.0f to MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
-                        0.5f to MaterialTheme.colorScheme.background.copy(alpha = 0.3f),
+                        0.0f to theme.surface.copy(alpha = 0.60f),
+                        0.5f to theme.surface.copy(alpha = 0.30f),
                         1.0f to Color.Transparent,
                     )
                 )
         )
+        // top quarter: from-surface/40 to-transparent (nav readability)
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .height(heroHeight * 0.25f)
                 .background(
                     Brush.verticalGradient(
-                        0.0f to MaterialTheme.colorScheme.background.copy(alpha = 0.4f),
-                        0.25f to Color.Transparent,
+                        0.0f to theme.surface.copy(alpha = 0.40f),
                         1.0f to Color.Transparent,
                     )
                 )
         )
 
-        // Layer 2: content (bottom-left, max-w-2xl)
+        // ── Layer 2: content column (site: .hero-content bottom-left, pb-16)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .fillMaxWidth(0.90f)
-                .padding(start = 18.dp, end = 18.dp, bottom = 86.dp),
+                .fillMaxWidth(0.92f)
+                .padding(start = 16.dp, end = 16.dp, bottom = 64.dp),
         ) {
-            val clearLogo = current.clearLogoUrl ?: clearLogoFor(current.displayTitle())
+            // TVDB clearlogo — the anime's title ARTWORK, not text.
+            val clearLogo = current.clearLogoUrl
             if (clearLogo != null) {
                 AsyncImage(
                     model = clearLogo,
                     contentDescription = current.displayTitle(),
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.heightIn(max = if (configuration.screenWidthDp < 600) 80.dp else 130.dp),
+                    modifier = Modifier
+                        .heightIn(max = if (isWide) 130.dp else 80.dp)
+                        .padding(bottom = 16.dp),
                 )
             } else {
+                // Fallback only when the API payload has no logo (offline mode).
                 Text(
                     text = current.displayTitle(),
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.ExtraBold,
+                    style = WebTextStyles.titleHero,
                     color = Color.White,
+                    fontWeight = FontWeight.ExtraBold,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 16.dp),
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // Meta pills row
+            // ── Meta pills row (site: .meta-pill-blur)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Star pill (yellow, for score)
                 current.averageScore?.let { score ->
                     MetaPill(
                         icon = Icons.Default.Star,
                         text = "${score}%",
-                        iconTint = Config.Theme.star,
-                        border = Config.Theme.star.copy(alpha = 0.4f),
-                        background = Config.Theme.star.copy(alpha = 0.2f),
-                        textTint = Config.Theme.star,
+                        iconTint = Color(0xFFFACC15),
+                        border = Color(0x66FACC15),       // yellow-500/40
+                        background = Color(0x33FACC15),   // yellow-500/20
+                        textTint = Color(0xFFFACC15),
+                        bold = true,
                     )
                 }
-                // Year pill
                 current.seasonYear?.let { year ->
-                    MetaPill(
-                        icon = Icons.Default.CalendarMonth,
-                        text = year.toString(),
-                    )
+                    MetaPill(icon = Icons.Default.CalendarMonth, text = year.toString())
                 }
-                // Episodes pill
-                current.episodes?.let { eps ->
-                    if (eps > 0) {
-                        MetaPill(
-                            icon = Icons.Default.Layers,
-                            text = "$eps Episodes",
-                        )
-                    }
+                current.episodes?.takeIf { it > 0 }?.let { eps ->
+                    MetaPill(icon = Icons.Default.Layers, text = "$eps Episodes")
                 }
-                // Duration pill
-                current.duration?.let { dur ->
-                    if (dur > 0) {
-                        MetaPill(
-                            icon = Icons.Default.Schedule,
-                            text = "$dur min",
-                        )
-                    }
+                current.duration?.takeIf { it > 0 }?.let { dur ->
+                    MetaPill(text = "$dur min")
                 }
-                // Format pill
                 current.format?.let { fmt ->
-                    MetaPill(
-                        icon = Icons.Default.Tv,
-                        text = fmt,
-                        upperCase = true,
-                    )
+                    MetaPill(icon = Icons.Default.Tv, text = fmt, upperCase = true)
                 }
             }
 
-            // Genre chips
+            // ── Genre chips (site: rounded-full border-white/10 bg-black/50)
             if (current.genres.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
                 Row(
+                    modifier = Modifier.padding(top = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    current.genres.take(4).forEach { genre ->
+                    current.genres.take(3).forEach { genre ->
                         GenreChip(text = genre)
                     }
                 }
             }
 
+            // ── Synopsis (site: line-clamp-2 text-base leading-relaxed text-zinc-400)
             current.description?.takeIf { it.isNotBlank() }?.let { synopsis ->
                 Text(
                     text = synopsis.replace(Regex("<[^>]*>"), "").trim(),
-                    color = Color.White.copy(alpha = 0.78f),
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = if (configuration.screenWidthDp < 600) 2 else 3,
+                    color = Color(0xFFA1A1AA),            // zinc-400
+                    style = WebTextStyles.base,
+                    lineHeight = 24.sp,
+                    maxLines = if (isWide) 3 else 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .padding(top = 12.dp, bottom = 20.dp),
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // Action buttons row
+            // ── Buttons (site: btn-primary = WHITE bg / black text)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // "Watch Now" — primary CTA
-                PrimaryActionButton(
+                HeroPrimaryButton(
                     icon = Icons.Default.PlayArrow,
                     text = "Watch Now",
                     onClick = { onWatchClick(current) },
                 )
-                // "More info"
-                SecondaryActionButton(
+                HeroSecondaryButton(
                     icon = Icons.Default.Info,
-                    text = "More info",
+                    text = "More Info",
                     onClick = { onAnimeClick(current) },
                 )
             }
         }
 
-        // Bottom row: progress dots + counter + nav arrows
+        // ── Bottom controls: dots + counter + arrows (site: bottom-4)
         Row(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
+                .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Progress dots
+            // Progress dots — inactive w-4; active w-8 with animated fill.
             Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 items.forEachIndexed { idx, _ ->
+                    val active = idx == currentIndex
                     Box(
                         modifier = Modifier
                             .height(4.dp)
-                            .width(if (idx == currentIndex) 32.dp else 16.dp)
+                            .width(if (active) 32.dp else 16.dp)
                             .clip(RoundedCornerShape(50))
-                            .background(
-                                if (idx == currentIndex) Color.White.copy(alpha = 0.8f)
-                                else Color.White.copy(alpha = 0.12f)
-                            )
+                            .background(Color(0x1FFFFFFF))       // white/12
                             .clickable { currentIndex = idx }
-                    )
+                    ) {
+                        if (active) {
+                            // Animated fill — mirrors the site's CSS transition
+                            // of the active dot's inner progress bar.
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(progress.coerceIn(0f, 1f))
+                                    .fillMaxHeight()
+                                    .background(theme.action)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -308,17 +318,16 @@ fun HeroCarousel(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Slide counter
+                // Slide counter (site: text-xs text-white/35 tabular-nums)
                 Text(
-                    text = "${currentIndex + 1}/${totalItems}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.6f),
+                    text = "${currentIndex + 1}/$totalItems",
+                    style = WebTextStyles.xs,
+                    color = Color(0x59FFFFFF),
                 )
-                // Nav arrows
-                NavArrowButton(icon = Icons.Default.ChevronLeft) {
+                HeroArrowButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft) {
                     currentIndex = if (currentIndex == 0) totalItems - 1 else currentIndex - 1
                 }
-                NavArrowButton(icon = Icons.Default.ChevronRight) {
+                HeroArrowButton(Icons.AutoMirrored.Filled.KeyboardArrowRight) {
                     currentIndex = (currentIndex + 1) % totalItems
                 }
             }
@@ -326,157 +335,134 @@ fun HeroCarousel(
     }
 }
 
+/** site: .meta-pill-blur — rounded-full border-white/15 bg-black/40 px-3 py-1 text-xs */
 @Composable
 private fun MetaPill(
     icon: ImageVector? = null,
     text: String,
-    iconTint: Color = Color.White.copy(alpha = 0.6f),
-    border: Color = Color.White.copy(alpha = 0.15f),
-    background: Color = Color.Black.copy(alpha = 0.4f),
-    textTint: Color = Color.White.copy(alpha = 0.7f),
+    iconTint: Color = Color(0x99FFFFFF),
+    border: Color = Color(0x26FFFFFF),
+    background: Color = Color(0x66000000),
+    textTint: Color = Color(0xB3FFFFFF),
+    bold: Boolean = false,
     upperCase: Boolean = false,
 ) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = background,
-        border = androidx.compose.foundation.BorderStroke(1.dp, border),
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(background)
+            .clickable(enabled = false) {}
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (icon != null) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(12.dp),
-                )
-            }
-            Text(
-                text = if (upperCase) text.uppercase() else text,
-                style = MaterialTheme.typography.labelSmall,
-                color = textTint,
-                fontWeight = FontWeight.Medium,
+        if (icon != null) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(12.dp),
             )
         }
-    }
-}
-
-@Composable
-private fun GenreChip(text: String) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = Color.Black.copy(alpha = 0.5f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
-    ) {
         Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.7f),
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            text = if (upperCase) text.uppercase() else text,
+            style = WebTextStyles.xs,
+            color = textTint,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
+            letterSpacing = if (upperCase) 0.8.sp else 0.sp,
         )
     }
 }
 
+/** site: genre chips — rounded-full border-white/10 bg-black/50 px-3 py-1 text-xs */
 @Composable
-private fun PrimaryActionButton(
+private fun GenreChip(text: String) {
+    Text(
+        text = text,
+        style = WebTextStyles.xs,
+        color = Color(0xB3FFFFFF),
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color(0x80000000))
+            .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    )
+}
+
+/** site: .btn.btn-md.btn-primary — WHITE background, near-black text, pill. */
+@Composable
+private fun HeroPrimaryButton(
     icon: ImageVector,
     text: String,
     onClick: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.primary,
-        shadowElevation = 8.dp,
-        modifier = Modifier.clickable(onClick = onClick),
+    val theme = LocalAnikageTheme.current
+    Row(
+        modifier = Modifier
+            .shadow(6.dp, RoundedCornerShape(50), spotColor = Color(0x4D000000))
+            .clip(RoundedCornerShape(50))
+            .background(theme.action)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+        Icon(icon, contentDescription = null, tint = theme.actionFg, modifier = Modifier.size(16.dp))
+        Text(
+            text = text,
+            style = WebTextStyles.sm,
+            color = theme.actionFg,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
+/** site: .cta-secondary-blur — border-white/15 bg-white/10, pill. */
 @Composable
-private fun SecondaryActionButton(
+private fun HeroSecondaryButton(
     icon: ImageVector,
     text: String,
     onClick: () -> Unit,
 ) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = Color.White.copy(alpha = 0.10f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-        modifier = Modifier.clickable(onClick = onClick),
+    Row(
+        modifier = Modifier
+            .shadow(6.dp, RoundedCornerShape(50), spotColor = Color(0x4D000000))
+            .clip(RoundedCornerShape(50))
+            .background(Color(0x1AFFFFFF))
+            .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(icon, contentDescription = null,
-                tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White,
-                fontWeight = FontWeight.Medium,
-            )
-        }
+        Icon(icon, contentDescription = null, tint = Color(0x99FFFFFF), modifier = Modifier.size(16.dp))
+        Text(
+            text = text,
+            style = WebTextStyles.sm,
+            color = Color.White,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
+/** site: .nav-arrow-blur — h-9 w-9 round, border-white/15. */
 @Composable
-private fun NavArrowButton(
-    icon: ImageVector,
-    onClick: () -> Unit,
-) {
-    Surface(
-        shape = CircleShape,
-        color = Color.Black.copy(alpha = 0.4f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+private fun HeroArrowButton(icon: ImageVector, onClick: () -> Unit) {
+    Box(
         modifier = Modifier
             .size(36.dp)
+            .clip(CircleShape)
+            .background(Color(0x59000000))
+            .border(1.dp, Color(0x26FFFFFF), CircleShape)
             .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(20.dp),
-            )
-        }
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(20.dp),
+        )
     }
-}
-
-/** Known official clearlogos used by the live Anikage hero when the catalogue
- * payload does not include a logo field. New server-provided values take
- * precedence through [Anime.clearLogoUrl]. */
-private fun clearLogoFor(title: String): String? = when {
-    title.contains("daemons of the shadow", ignoreCase = true) ->
-        "https://artworks.thetvdb.com/banners/v4/series/452711/clearlogo/69d14be996683.png"
-    title.contains("bleach", ignoreCase = true) ->
-        "https://artworks.thetvdb.com/banners/v4/series/74796/clearlogo/611b6233b8698.png"
-    title.contains("reincarnated as a slime", ignoreCase = true) ->
-        "https://artworks.thetvdb.com/banners/v4/series/352408/clearlogo/611c83c1eba90.png"
-    title.contains("black torch", ignoreCase = true) ->
-        "https://artworks.thetvdb.com/banners/v4/series/461194/clearlogo/6a544094daf9f.png"
-    title.contains("jaadugar", ignoreCase = true) || title.contains("witch in mongolia", ignoreCase = true) ->
-        "https://artworks.thetvdb.com/banners/v4/series/462561/clearlogo/6a544093580a5.png"
-    title.equals("one piece", ignoreCase = true) ->
-        "https://artworks.thetvdb.com/banners/v4/series/81797/clearlogo/611b6189d88b6.png"
-    else -> null
 }

@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import com.anikage.app.ui.components.ErrorOrEmptyState
 
 /**
@@ -23,13 +24,18 @@ import com.anikage.app.ui.components.ErrorOrEmptyState
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TorrentsScreen() {
-    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        TopAppBar(
-            title = { Text("Torrents") },
-            colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background,
-                titleContentColor = MaterialTheme.colorScheme.onBackground,
-            ),
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(top = 96.dp)
+    ) {
+        Text(
+            text = "Torrents",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
         ErrorOrEmptyState(
             title = "Torrents disabled",

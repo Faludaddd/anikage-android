@@ -59,7 +59,8 @@ fun MusicScreen(onAnimeClick: (Anime) -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 20.dp, vertical = 28.dp),
+            .padding(horizontal = 20.dp)
+            .padding(top = 96.dp, bottom = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Icon(Icons.Default.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.primary)

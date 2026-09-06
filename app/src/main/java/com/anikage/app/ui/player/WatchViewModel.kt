@@ -53,6 +53,10 @@ data class WatchUiState(
     val slug: String? = null,
     val viewCount: Long? = null,
     val comments: CommentsUiState = CommentsUiState(),
+    /** Site's server panel state. */
+    val streamLang: String = Config.DEFAULT_STREAM_LANG,
+    val streamServer: String = "Koto",
+    val servers: List<String> = emptyList(),
 )
 
 /**
@@ -181,7 +185,7 @@ class WatchViewModel(
             _state.value = _state.value.copy(streamLoading = true, streamError = null)
             val slug = _state.value.slug
             val streamUrl: String? = if (slug != null) {
-                repo.anikageStreamUrl(slug, episode)
+                repo.anikageStreamUrl(slug, episode, _state.value.streamServer.lowercase(), _state.value.streamLang)
             } else {
                 AppLogger.w(LogCategory.PLAYER, "No Anikage slug — stream unavailable")
                 null
@@ -208,6 +212,16 @@ class WatchViewModel(
                 launch { repo.anikageViews(slug, episode)?.let { vc ->
                     _state.value = _state.value.copy(viewCount = vc)
                 } }
+                launch {
+                    repo.anikageServers(slug, episode).getOrNull()?.let { servers ->
+                        if (servers.isNotEmpty()) {
+                            _state.value = _state.value.copy(
+                                servers = servers,
+                                streamServer = if (servers.contains(_state.value.streamServer)) _state.value.streamServer else servers.first(),
+                            )
+                        }
+                    }
+                }
             }
             loadComments(episode)
 
@@ -256,6 +270,26 @@ class WatchViewModel(
         viewModelScope.launch { saveProgressNow() }
         _state.value = _state.value.copy(episode = ep, savedPositionMs = 0L, viewCount = null)
         loadEpisode(ep)
+    }
+
+    /** Site's SUB/DUB toggle — reloads the current episode's stream. */
+    fun setStreamLang(lang: String) {
+        if (_state.value.streamLang == lang) return
+        _state.value = _state.value.copy(streamLang = lang, streamUrl = null)
+        loadEpisode(_state.value.episode)
+    }
+
+    /** Site's server-chip switch — reloads the current episode's stream. */
+    fun setStreamServer(server: String) {
+        if (_state.value.streamServer == server) return
+        _state.value = _state.value.copy(streamServer = server, streamUrl = null)
+        loadEpisode(_state.value.episode)
+    }
+
+    /** Re-resolve the stream for the current episode (site's refresh button). */
+    fun reloadStream() {
+        _state.value = _state.value.copy(streamUrl = null)
+        loadEpisode(_state.value.episode)
     }
 
     /** Reload comments for the current episode (pull-to-refresh in the panel). */

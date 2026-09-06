@@ -20,6 +20,7 @@ import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.data.model.AnimeDetails
 import com.anikage.app.core.data.model.AnimeTitle
 import com.anikage.app.core.data.model.CoverImage
+import com.anikage.app.core.data.model.HomeFeed
 import com.anikage.app.core.data.model.PageInfo
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
@@ -200,6 +201,64 @@ class AnikageRepository private constructor(
     // -------------------------------------------------------------------------
     //  Home screen — sections (TTL 60s, single-flight)
     // -------------------------------------------------------------------------
+
+    /**
+     * The website's own homepage payload (GET /api/media/anime/home):
+     * spotlight hero slides (with TVDB fanart + clearLogo artwork), the
+     * Editor's Pick featured card, and every rail in site order. This is
+     * the source of truth for a 1:1 home screen — AniList fallbacks are
+     * used only when the Anikage API is unreachable.
+     */
+    suspend fun homeFeed(forceRefresh: Boolean = false): Result<HomeFeed> =
+        singleFlight("anikage:homeFeed", TTL_LIST, forceRefresh) { fetchHomeFeed() }
+
+    private suspend fun fetchHomeFeed(): Result<HomeFeed> =
+        withContext(Dispatchers.IO) {
+            anikage?.let { api ->
+                try {
+                    val response = api.home()
+                    val feed = HomeFeed(
+                        spotlight = response.spotlight.map { it.toAnime() },
+                        featured = response.featured?.toAnime(),
+                        trending = response.trending.map { it.toAnime() },
+                        seasonal = response.seasonal.map { it.toAnime() },
+                        favorites = response.favorites.map { it.toAnime() },
+                        top10 = response.top10.map { it.toAnime() },
+                        popularMovies = response.popularMovies.map { it.toAnime() },
+                        upcoming = response.upcoming.map { it.toAnime() },
+                    )
+                    if (feed.spotlight.isNotEmpty() || feed.trending.isNotEmpty()) {
+                        cacheAll(feed.trending + feed.seasonal + feed.favorites)
+                        return@withContext Result.success(feed)
+                    }
+                } catch (e: Exception) {
+                    AppLogger.w(LogCategory.DATA, "Anikage home feed failed — falling back to AniList", e)
+                }
+            }
+            // AniList fallback (no hero artwork available in this mode).
+            try {
+                val trending = api.trending(perPage = 20).first
+                val seasonal = api.popularThisSeason(currentSeason(), currentYear(), perPage = 20).first
+                val favorites = api.topRated(perPage = 20).first
+                val upcoming = api.upcoming(perPage = 20).first
+                cacheAll(trending + seasonal + favorites)
+                Result.success(
+                    HomeFeed(
+                        spotlight = emptyList(),
+                        featured = null,
+                        trending = trending,
+                        seasonal = seasonal,
+                        favorites = favorites,
+                        top10 = favorites.take(10),
+                        popularMovies = emptyList(),
+                        upcoming = upcoming,
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w(tag, "homeFeed fallback failed: ${e.message}")
+                Result.failure(e)
+            }
+        }
 
     suspend fun trending(forceRefresh: Boolean = false): Result<List<Anime>> =
         singleFlight("anikage:trending", TTL_LIST, forceRefresh) { fetchTrending() }
@@ -439,12 +498,17 @@ class AnikageRepository private constructor(
         }
 
     /** Stream sources for an episode — tokens resolve via [AnikageApi.resolveStreamUrl]. TTL 30s. */
-    suspend fun anikageSources(slug: String, episode: Int): Result<AnikageSourcesResponse> =
-        singleFlight("anikage:sources:$slug:$episode", TTL_STREAM) {
+    suspend fun anikageSources(
+        slug: String,
+        episode: Int,
+        provider: String = Config.DEFAULT_STREAM_PROVIDER,
+        lang: String = Config.DEFAULT_STREAM_LANG,
+    ): Result<AnikageSourcesResponse> =
+        singleFlight("anikage:sources:$slug:$episode:$provider:$lang", TTL_STREAM) {
             val api = anikage
                 ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
             try {
-                val response = api.sources(slug, episode)
+                val response = api.sources(slug, episode, provider, lang)
                 if (response.sources.isEmpty()) {
                     AppLogger.w(LogCategory.PLAYER, "No stream sources for $slug ep $episode")
                 } else {
@@ -462,13 +526,44 @@ class AnikageRepository private constructor(
         }
 
     /** Full HLS URL for the best source, or null when the provider chain fails. */
-    suspend fun anikageStreamUrl(slug: String, episode: Int): String? {
+    suspend fun anikageStreamUrl(
+        slug: String,
+        episode: Int,
+        provider: String = Config.DEFAULT_STREAM_PROVIDER,
+        lang: String = Config.DEFAULT_STREAM_LANG,
+    ): String? {
         val api = anikage ?: return null
-        val result = anikageSources(slug, episode)
+        val result = anikageSources(slug, episode, provider, lang)
         val response = result.getOrNull() ?: return null
         val best = response.sources.firstOrNull { it.isM3U8 } ?: response.sources.firstOrNull()
         val token = best?.url ?: return null
         return api.resolveStreamUrl(token)
+    }
+
+    /** Server list for an episode (site's "Servers" panel). TTL 60s. */
+    suspend fun anikageServers(slug: String, episode: Int): Result<List<String>> =
+        singleFlight("anikage:servers:$slug:$episode", TTL_LIST) {
+            val api = anikage
+                ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
+            try {
+                val response = api.servers(slug, episode)
+                val names = response.servers.map { serverName(it.providerId) }.distinct()
+                Result.success(names)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+    /** Provider id → display name (site shows Neko / Miko / Wave / Koto …). */
+    private fun serverName(providerId: String): String = when (providerId.lowercase()) {
+        "koto" -> "Koto"
+        "kiwi" -> "Kiwi"
+        "neko" -> "Neko"
+        "megg" -> "Megg"
+        "dib" -> "Dib"
+        "wave" -> "Wave"
+        "zen" -> "Zen"
+        else -> providerId.replaceFirstChar { it.uppercase() }
     }
 
     /** Comments for an episode. TTL 15s so a re-open refreshes but rapid switches don't refetch. */
@@ -590,6 +685,9 @@ private fun com.anikage.app.core.data.api.AnikageMedia.toAnime() = Anime(
         color = coverColor,
     ),
     bannerImage = bannerImage,
+    fanartUrl = fanart,
+    clearLogoUrl = clearLogo,
+    trailerId = trailerId,
     description = description,
     averageScore = averageScore,
     meanScore = meanScore,

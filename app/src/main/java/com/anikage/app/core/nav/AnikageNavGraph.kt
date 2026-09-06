@@ -51,13 +51,12 @@ fun AnikageApp() {
         color = MaterialTheme.colorScheme.background,
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Main content
+            // Main content — screens handle their own top clearance for the
+            // floating nav (site: content starts under the floating bar).
             NavHost(
                 navController = navController,
                 startDestination = Config.Nav.DEFAULT_SCREEN,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(top = if (showTopBar && !isHome) 76.dp else 0.dp),
+                modifier = Modifier.fillMaxSize(),
             ) {
                 composable(Routes.HOME) {
                     HomeScreen(
@@ -79,6 +78,7 @@ fun AnikageApp() {
                 composable(Routes.SEARCH) {
                     SearchScreen(
                         onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onBackClick = { navController.popBackStack() },
                     )
                 }
                 composable(Routes.MUSIC) {
@@ -151,7 +151,7 @@ fun AnikageApp() {
                 )
             }
 
-            // Floating bottom mobile nav (overlay)
+            // Floating bottom mobile nav (site: centered glass pill).
             if (showBottomNav) {
                 FloatingBottomNav(
                     currentRoute = currentRoute ?: "home",
@@ -165,7 +165,7 @@ fun AnikageApp() {
                         }
                     },
                     modifier = Modifier
-                        .align(androidx.compose.ui.Alignment.BottomEnd)
+                        .align(androidx.compose.ui.Alignment.BottomCenter)
                         .zIndex(10f),
                 )
             }

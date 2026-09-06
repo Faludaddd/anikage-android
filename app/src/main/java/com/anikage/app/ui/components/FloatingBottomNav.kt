@@ -1,50 +1,50 @@
 package com.anikage.app.ui.components
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
-import com.anikage.app.Config
+import com.anikage.app.core.theme.LocalAnikageTheme
 
 /**
- * Anikage-style floating bottom-right mobile nav.
+ * MOBILE BOTTOM NAV — 1:1 port of the site's floating glass pill.
  *
- * Real Anikage layout (mobile only — hidden on lg+ where the top pill
- * has the nav tabs):
+ * Site DOM (mobile only, hidden ≥lg):
+ *   div.fixed.bottom-0.pb-3.centered > nav.pointer-events-auto
+ *     .rounded-full.border-white/10.bg-surface/70.p-1.shadow-sm.backdrop-blur-xl
+ *     > 5 × a.size-10 (home/browse/music/schedule/torrents) +
+ *     .pill-indicator (sliding white/15 pill with white/20 blur-2xl glow)
  *
- *   ┌──────────────────────────────────────────┐
- *   │ [house][compass][calendar][music][search] │   <- floating bottom-right pill
- *   └──────────────────────────────────────────┘
- *
- * Pill:
- *   - rounded-full, border-white/10, bg-surface/70, backdrop-blur-xl
- *   - padding 1 (4dp)
- *   - Contains icon-only buttons (40dp square, rounded-full)
- *   - Active button gets a white/15 pill background
- *   - No text labels — icons only
+ * Active icon text-white; inactive text-fg-muted. The indicator springs
+ * horizontally to the active tab (site's pill-indicator translateX).
  */
 @Composable
 fun FloatingBottomNav(
@@ -53,79 +53,78 @@ fun FloatingBottomNav(
     modifier: Modifier = Modifier,
 ) {
     val configuration = LocalConfiguration.current
-    val isWideScreen = configuration.screenWidthDp.dp >= 600.dp
+    // Hidden on wide screens — the top pill carries the nav links there.
+    if (configuration.screenWidthDp.dp >= 840.dp) return
 
-    // Hide on wide screens (the top pill has nav tabs there).
-    if (isWideScreen) return
+    val theme = LocalAnikageTheme.current
+    val items = bottomNavItems()
+    val activeIndex = items.indexOfFirst { it.route == currentRoute }.coerceAtLeast(0)
+    val itemSize = 40.dp        // site: size-10
+    val gap = 4.dp              // site: gap-1
+
+    // Sliding indicator (site: pill-indicator transform translateX).
+    val indicatorOffset by animateDpAsState(
+        targetValue = (itemSize + gap) * activeIndex,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioLowBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "navIndicator",
+    )
 
     Box(
-        modifier = modifier
-            .padding(16.dp),
-        contentAlignment = Alignment.BottomEnd,
+        modifier = modifier.padding(bottom = 12.dp),   // site: pb-3
+        contentAlignment = Alignment.BottomCenter,
     ) {
-        Surface(
-            shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)),
-            shadowElevation = 4.dp,
+        Box(
+            modifier = Modifier
+                .shadow(8.dp, RoundedCornerShape(50), spotColor = Color(0x40000000))
+                .clip(RoundedCornerShape(50))
+                .background(theme.surface.copy(alpha = 0.70f))
+                .border(BorderStroke(1.dp, Color(0x1AFFFFFF)), RoundedCornerShape(50))
+                .padding(4.dp),                        // site: p-1
         ) {
-            Row(
-                modifier = Modifier.padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                bottomNavItems().forEach { item ->
-                    BottomNavIcon(
-                        icon = item.icon,
-                        contentDescription = item.label,
-                        isSelected = currentRoute == item.route,
-                        onClick = { onNavigate(item.route) },
+            Box {
+                // Sliding pill indicator (site: bg-white/15 + glow blur-2xl).
+                if (activeIndex < items.size) {
+                    Box(
+                        modifier = Modifier
+                            .offset(x = indicatorOffset)
+                            .size(itemSize)
+                            .background(Color(0x26FFFFFF), CircleShape)
                     )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    items.forEach { item ->
+                        val selected = item.route == currentRoute
+                        Box(
+                            modifier = Modifier
+                                .size(itemSize)
+                                .clip(CircleShape)
+                                .clickable { onNavigate(item.route) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                item.icon,
+                                contentDescription = item.label,
+                                tint = if (selected) Color.White else theme.fgMuted,
+                                modifier = Modifier.size(18.dp),  // site: size-4.5
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-@Composable
-private fun BottomNavIcon(
-    icon: ImageVector,
-    contentDescription: String,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .clip(CircleShape)
-            .background(
-                if (isSelected) Color.White.copy(alpha = 0.15f)
-                else Color.Transparent
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            icon,
-            contentDescription = contentDescription,
-            tint = if (isSelected) Color.White
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-    }
-}
-
 private data class BottomItem(val route: String, val label: String, val icon: ImageVector)
 
-private fun bottomNavItems(): List<BottomItem> {
-    val items = mutableListOf(
-        BottomItem("home", "Home", Icons.Default.Home),
-        BottomItem("browse", "Browse", Icons.Default.Explore),
-        BottomItem("schedule", "Schedule", Icons.Default.CalendarMonth),
-    )
-    if (Config.Features.ENABLE_MUSIC_SCREEN) {
-        items.add(BottomItem("music", "Music", Icons.Default.MusicNote))
-    }
-    items.add(BottomItem("search", "Search", Icons.Default.Search))
-    return items
-}
+/** Site order: Home, Browse, Music, Schedule, Torrents. */
+private fun bottomNavItems(): List<BottomItem> = listOf(
+    BottomItem("home", "Home", Icons.Default.Home),
+    BottomItem("browse", "Browse", Icons.Default.GridView),
+    BottomItem("music", "Music", Icons.Default.MusicNote),
+    BottomItem("schedule", "Schedule", Icons.Default.CalendarMonth),
+    BottomItem("torrents", "Torrents", Icons.Default.Link),
+)

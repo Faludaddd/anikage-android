@@ -46,9 +46,28 @@ data class BannerImage(
 )
 
 // ---------------------------------------------------------------------------
-//  Anime — the core model used across the app
+//  HomeFeed — the website homepage payload (mirrors GET /api/media/anime/home)
 // ---------------------------------------------------------------------------
 
+/**
+ * 1:1 mirror of the Anikage homepage: spotlight = hero carousel slides
+ * (TVDB fanart + clearLogo artwork), featured = "Editor's Pick" banner,
+ * plus every rail in the exact order the site renders them.
+ */
+data class HomeFeed(
+    val spotlight: List<Anime> = emptyList(),
+    val featured: Anime? = null,
+    val trending: List<Anime> = emptyList(),
+    val seasonal: List<Anime> = emptyList(),
+    val favorites: List<Anime> = emptyList(),
+    val top10: List<Anime> = emptyList(),
+    val popularMovies: List<Anime> = emptyList(),
+    val upcoming: List<Anime> = emptyList(),
+)
+
+// ---------------------------------------------------------------------------
+//  Anime — the core model used across the app
+// ---------------------------------------------------------------------------
 @Serializable
 data class Anime(
     val id: Int,
@@ -56,8 +75,12 @@ data class Anime(
     val title: AnimeTitle = AnimeTitle(),
     val coverImage: CoverImage = CoverImage(),
     val bannerImage: String? = null,
+    /** TVDB background artwork — used by the website hero (fanart). */
+    val fanartUrl: String? = null,
     /** Official transparent title artwork used by Anikage's hero carousel. */
     val clearLogoUrl: String? = null,
+    /** YouTube trailer id (site hero trailers). */
+    val trailerId: String? = null,
     val description: String? = null,
     val averageScore: Int? = null,
     val meanScore: Int? = null,
@@ -191,6 +214,12 @@ data class AnimeDetails(
     val title: AnimeTitle = AnimeTitle(),
     val coverImage: CoverImage = CoverImage(),
     val bannerImage: String? = null,
+    /** TVDB background artwork — used by the website hero (fanart). */
+    val fanartUrl: String? = null,
+    /** Official transparent title artwork used by Anikage's hero carousel. */
+    val clearLogoUrl: String? = null,
+    /** YouTube trailer id (site hero trailers). */
+    val trailerId: String? = null,
     val description: String? = null,
     val averageScore: Int? = null,
     val meanScore: Int? = null,

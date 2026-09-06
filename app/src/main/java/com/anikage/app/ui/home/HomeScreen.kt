@@ -1,52 +1,59 @@
 package com.anikage.app.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
-import com.anikage.app.Config
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.Anime
-import com.anikage.app.ui.components.AnimeCard
+import com.anikage.app.core.theme.LocalAnikageTheme
+import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.components.ErrorOrEmptyState
+import com.anikage.app.ui.components.FeaturedBanner
 import com.anikage.app.ui.components.HeroCarousel
 import com.anikage.app.ui.components.LoadingGrid
+import com.anikage.app.ui.components.SectionBadge
+import com.anikage.app.ui.components.SectionHeader
+import com.anikage.app.ui.components.SiteCarouselRow
+import com.anikage.app.ui.components.Top10Row
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 
+/**
+ * HOME — 1:1 port of the anikage.cc homepage (mobile layout).
+ *
+ * Site section order (from the live DOM):
+ *   hero (spotlight, 72vh) → Featured Anime [Editor's Pick] →
+ *   Trending Now [HOT] → Popular This Season [SEASONAL] →
+ *   Most Favorite [TOP] → Top 10 Anime ⇄ Popular Movies →
+ *   Coming Soon [UPCOMING]
+ * Sections live in `main.container-custom flex-col gap-6` (24px), rails
+ * scroll horizontally with edge-fade arrows.
+ */
 @Composable
 fun HomeScreen(
     onAnimeClick: (Anime) -> Unit,
@@ -75,13 +82,15 @@ private fun HomeContent(
     onSeeAllClick: (String) -> Unit,
     onRetry: () -> Unit,
 ) {
+    val theme = LocalAnikageTheme.current
+    val feed = state.feed
+
     if (state.loading) {
-        LoadingGrid(columns = Config.Images.GRID_COLUMNS_PHONE, rows = 4)
+        LoadingGrid(columns = 3, rows = 4)
         return
     }
 
-    if (state.error != null && state.trending.isEmpty() && state.popularSeason.isEmpty() &&
-        state.topRated.isEmpty() && state.upcoming.isEmpty()) {
+    if (feed.spotlight.isEmpty() && feed.trending.isEmpty() && feed.seasonal.isEmpty()) {
         ErrorOrEmptyState(
             title = "Couldn't load anime",
             subtitle = state.error ?: "Check your connection.",
@@ -93,121 +102,151 @@ private fun HomeContent(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(bottom = 100.dp),
+            .background(theme.surface),
+        // Site: main.container-custom flex flex-col gap-6 (24px) + bottom nav space.
+        contentPadding = PaddingValues(bottom = 96.dp),
     ) {
-        // Hero carousel — full-bleed, takes top trending item as the first slide
-        if (state.trending.isNotEmpty()) {
-            item {
+        // 1 ── HERO (spotlight slides with TVDB fanart + clearLogo).
+        if (feed.spotlight.isNotEmpty()) {
+            item(key = "hero") {
                 HeroCarousel(
-                    items = state.trending.take(6),
+                    items = feed.spotlight,
                     onAnimeClick = onAnimeClick,
                     onWatchClick = onWatchClick,
                 )
+                Spacer(Modifier.height(24.dp))
             }
         }
 
-        if (state.popularSeason.isNotEmpty()) {
-            item {
-                SectionHeader(title = "Popular This Season", eyebrow = "SEASONAL", onViewAll = { onSeeAllClick("popular") })
-                AnimeRow(items = state.popularSeason, onClick = onAnimeClick)
+        // 2 ── FEATURED / Editor's Pick.
+        feed.featured?.let { featured ->
+            item(key = "featured") {
+                Section(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                ) {
+                    FeaturedBanner(
+                        anime = featured,
+                        onWatchClick = onWatchClick,
+                        onClick = onAnimeClick,
+                    )
+                }
             }
         }
 
-        if (state.trending.isNotEmpty()) {
-            item {
-                SectionHeader(title = "Trending Now", eyebrow = "HOT", onViewAll = { onSeeAllClick("trending") })
-                AnimeRow(items = state.trending, onClick = onAnimeClick)
+        // 3 ── Trending Now [HOT].
+        if (feed.trending.isNotEmpty()) {
+            item(key = "trending") {
+                Section {
+                    SectionHeader(
+                        title = "Trending Now",
+                        badge = SectionBadge.HOT,
+                        onViewAll = { onSeeAllClick("trending") },
+                    )
+                    SiteCarouselRow(items = feed.trending, onClick = onAnimeClick)
+                }
             }
         }
 
-        if (state.topRated.isNotEmpty()) {
-            item {
-                SectionHeader(title = "Most Favorite", eyebrow = "TOP", onViewAll = { onSeeAllClick("favorite") })
-                AnimeRow(items = state.topRated, onClick = onAnimeClick)
+        // 4 ── Popular This Season [SEASONAL].
+        if (feed.seasonal.isNotEmpty()) {
+            item(key = "seasonal") {
+                Section {
+                    SectionHeader(
+                        title = "Popular This Season",
+                        badge = SectionBadge.SEASONAL,
+                        onViewAll = { onSeeAllClick("seasonal") },
+                    )
+                    SiteCarouselRow(items = feed.seasonal, onClick = onAnimeClick)
+                }
             }
         }
 
-        if (state.upcoming.isNotEmpty()) {
-            item {
-                SectionHeader(title = "Upcoming", eyebrow = "SEASONAL", onViewAll = { onSeeAllClick("upcoming") })
-                AnimeRow(items = state.upcoming, onClick = onAnimeClick)
+        // 5 ── Most Favorite [TOP].
+        if (feed.favorites.isNotEmpty()) {
+            item(key = "favorites") {
+                Section {
+                    SectionHeader(
+                        title = "Most Favorite",
+                        badge = SectionBadge.TOP,
+                        onViewAll = { onSeeAllClick("favorite") },
+                    )
+                    SiteCarouselRow(items = feed.favorites, onClick = onAnimeClick)
+                }
+            }
+        }
+
+        // 6 ── Top 10 Anime ⇄ Popular Movies (toggle, site: header button).
+        if (feed.top10.isNotEmpty() || feed.popularMovies.isNotEmpty()) {
+            item(key = "top10") {
+                var showMovies by rememberSaveable { mutableStateOf(false) }
+                Section {
+                    SectionHeader(
+                        title = if (showMovies) "Popular Movies" else "Top 10 Anime",
+                        trailing = {
+                            MoviesToggle(
+                                label = if (showMovies) "Top 10 Anime" else "Popular Movies",
+                                onClick = { showMovies = !showMovies },
+                            )
+                        },
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val list = if (showMovies) feed.popularMovies else feed.top10
+                        list.take(10).forEachIndexed { idx, anime ->
+                            Top10Row(rank = idx + 1, anime = anime, onClick = onAnimeClick)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 7 ── Coming Soon [UPCOMING].
+        if (feed.upcoming.isNotEmpty()) {
+            item(key = "upcoming") {
+                Section {
+                    SectionHeader(
+                        title = "Coming Soon",
+                        badge = SectionBadge.UPCOMING,
+                        onViewAll = { onSeeAllClick("upcoming") },
+                    )
+                    SiteCarouselRow(items = feed.upcoming, onClick = onAnimeClick)
+                }
             }
         }
     }
 }
 
+/** One site section: 24px top gap (gap-6) + 16px horizontal container padding. */
 @Composable
-fun SectionHeader(title: String, eyebrow: String? = null, onViewAll: () -> Unit = {}) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.White,
-                fontWeight = FontWeight.ExtraBold,
-            )
-            eyebrow?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Config.Theme.primary,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                )
-            }
-        }
-        // "View All →" link
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .clickable(onClick = onViewAll)
-                .padding(4.dp),
-        ) {
-            Text(
-                text = "View All",
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White.copy(alpha = 0.6f),
-                fontWeight = FontWeight.Medium,
-            )
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.6f),
-                modifier = Modifier.size(16.dp),
-            )
-        }
-    }
-}
-
-@Composable
-fun AnimeRow(
-    items: List<Anime>,
-    onClick: (Anime) -> Unit,
+private fun Section(
     modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
 ) {
-    LazyRow(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(horizontal = 18.dp),
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 24.dp)
     ) {
-        items(items) { anime ->
-            AnimeCard(
-                anime = anime,
-                onClick = onClick,
-                modifier = Modifier.width(132.dp),
-            )
-        }
+        content()
+    }
+}
+
+/** site: header toggle button — rounded-lg border-white/10 bg-white/3, text-sm. */
+@Composable
+private fun MoviesToggle(label: String, onClick: () -> Unit) {
+    val theme = LocalAnikageTheme.current
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0x08FFFFFF))
+            .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text = label,
+            style = WebTextStyles.sm,
+            color = theme.fgMuted,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }

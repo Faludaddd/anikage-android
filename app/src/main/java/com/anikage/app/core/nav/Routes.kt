@@ -33,15 +33,10 @@ object Routes {
     const val WATCH = "watch/{id}/{episode}"
     fun watch(id: Int, episode: Int = 1) = "watch/$id/$episode"
 
-    /** Top-level routes shown in the bottom navigation. Matches Anikage's mobile nav. */
-    val bottomNav: List<String> = buildList {
-        add(HOME)
-        add(BROWSE)
-        add(SCHEDULE)
-        if (com.anikage.app.Config.Features.ENABLE_MUSIC_SCREEN) add(MUSIC)
-        if (com.anikage.app.Config.Features.ENABLE_TORRENTS_SCREEN) add(TORRENTS)
-        add(SEARCH)
-    }
+    /** Bottom nav — exact site set + order: Home, Browse, Music, Schedule, Torrents. */
+    val bottomNav: List<String> = listOf(
+        HOME, BROWSE, MUSIC, SCHEDULE, TORRENTS,
+    )
 
     /** Routes that show the top app bar (logo + search + bell + settings). */
     val topBarScreens: List<String> = listOf(

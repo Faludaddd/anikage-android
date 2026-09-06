@@ -50,6 +50,17 @@ data class AnikageMedia(
     val type: String? = null,
     val description: String? = null,
     val nextAiringEpisode: AnikageAiringEpisode? = null,
+    // Spotlight / hero-slide fields (GET /api/media/anime/home):
+    /** TVDB background artwork — the website hero background image. */
+    val fanart: String? = null,
+    /** TVDB transparent title logo — the website hero logo image. */
+    val clearLogo: String? = null,
+    /** YouTube trailer id (site plays it muted in the hero). */
+    val trailerId: String? = null,
+    /** Spotlight rank (1..6). */
+    val rank: Int? = null,
+    /** Editor's-pick index for the featured card. */
+    val index: Int? = null,
 )
 
 @Serializable
@@ -57,12 +68,19 @@ data class AnikageTitle(
     val romaji: String? = null,
     val english: String? = null,
     val native: String? = null,
+    val userPreferred: String? = null,
 ) {
     fun preferred(): String =
         english?.takeIf { it.isNotBlank() }
+            ?: userPreferred?.takeIf { it.isNotBlank() }
             ?: romaji?.takeIf { it.isNotBlank() }
             ?: native?.takeIf { it.isNotBlank() }
             ?: "Unknown"
+
+    /** Romaji-first variant (the site shows romaji as the secondary title). */
+    fun secondary(): String? =
+        romaji?.takeIf { it.isNotBlank() && it != preferred() }
+            ?: native?.takeIf { it.isNotBlank() && it != preferred() }
 }
 
 @Serializable
@@ -79,6 +97,31 @@ data class AnikageAiringEpisode(
     val episode: Int? = null,
     val airingAt: Long? = null,
     val timeUntilAiring: Long? = null,
+)
+
+// ---------------------------------------------------------------------------
+//  Home — GET /api/media/anime/home
+//
+//  The exact payload the live website renders its homepage from:
+//  { trending[15], seasonal[15], upcoming[15], top10[10], popularMovies[10],
+//    favorites[15], spotlight[6], featured, cachedAt }
+//
+//  `spotlight` items are the hero slides — they carry TVDB `fanart`
+//  (background artwork) + `clearLogo` (transparent title logo), which is
+//  what makes the website's hero look the way it does.
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class AnikageHomeResponse(
+    val trending: List<AnikageMedia> = emptyList(),
+    val seasonal: List<AnikageMedia> = emptyList(),
+    val upcoming: List<AnikageMedia> = emptyList(),
+    val top10: List<AnikageMedia> = emptyList(),
+    val popularMovies: List<AnikageMedia> = emptyList(),
+    val favorites: List<AnikageMedia> = emptyList(),
+    val spotlight: List<AnikageMedia> = emptyList(),
+    val featured: AnikageMedia? = null,
+    val cachedAt: Long? = null,
 )
 
 // ---------------------------------------------------------------------------

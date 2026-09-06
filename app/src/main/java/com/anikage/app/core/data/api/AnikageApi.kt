@@ -94,6 +94,17 @@ class AnikageApi(
     }
 
     // ---------------------------------------------------------------------
+    //  Home — the exact payload the website homepage renders from.
+    //  spotlight[6] = hero slides (TVDB fanart + clearLogo), featured =
+    //  Editor's Pick, plus every rail the site shows.
+    // ---------------------------------------------------------------------
+
+    suspend fun home(): AnikageHomeResponse {
+        val url = url(base, "/api/media/anime/home")
+        return json.decodeFromString(get(url))
+    }
+
+    // ---------------------------------------------------------------------
     //  Browse / search
     // ---------------------------------------------------------------------
 

@@ -1,18 +1,14 @@
 package com.anikage.app.ui.player
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,25 +23,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,16 +54,24 @@ import coil.compose.AsyncImage
 import com.anikage.app.Config
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.api.AnikageComment
+import com.anikage.app.core.theme.LocalAnikageTheme
+import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.components.ErrorOrEmptyState
 import com.anikage.app.ui.components.LoadingSpinner
 import java.time.Duration
 import java.time.Instant
 
 /**
- * Watch screen: fullscreen ExoPlayer + episode switcher + a comments panel
- * (mirrors the site's comment section under the player).
+ * WATCH — 1:1 port of anikage.cc/anime/watch/{id}?ep=n (mobile).
+ *
+ * Site layout (portrait page, no forced landscape):
+ *   ├─ player 16:9 rounded-2xl with ambient glow (back button overlay)
+ *   ├─ EP chip + "14,702 views" + action buttons (Add to List / Download / Report)
+ *   ├─ server panel: "Servers (4)" + SUB/DUB segmented + server chips
+ *   ├─ mobile tabs: Episodes (count) | Comments
+ *   ├─ episode rows: h-76 thumb + title + desc + progress bar
+ *   └─ comments: header card + list
  */
-@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 fun WatchScreen(
     animeId: Int,
@@ -83,26 +86,23 @@ fun WatchScreen(
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
     val player = remember { viewModel.player() }
+    val theme = LocalAnikageTheme.current
 
-    var showComments by remember { mutableStateOf(false) }
+    // Mobile tab: 0 = Episodes, 1 = Comments (site's .mobile-tabs).
+    var tab by remember { mutableIntStateOf(0) }
 
     val activity = context as? android.app.Activity
     DisposableEffect(Unit) {
         val originalOrientation = activity?.requestedOrientation
-        if (Config.Player.FORCE_LANDSCAPE_FULLSCREEN) {
-            activity?.requestedOrientation =
-                android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        }
         onDispose {
-            // Save progress before leaving
+            // Save progress before leaving.
             val position = player.currentPosition
             val duration = player.duration.coerceAtLeast(0L)
             if (duration > 0) viewModel.saveProgress(position, duration)
-            if (Config.Player.FORCE_LANDSCAPE_FULLSCREEN) {
-                activity?.requestedOrientation =
-                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            if (originalOrientation != null) {
+                activity?.requestedOrientation = originalOrientation
             }
-            // Enter PiP if available and a video is actually playing
+            // Enter PiP if available and a video is actually playing.
             if (Config.Player.AUTO_PIP_ON_LEAVE &&
                 android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
                 player.isPlaying
@@ -117,13 +117,14 @@ fun WatchScreen(
         }
     }
 
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .background(Color.Black)) {
-
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(theme.surface)
+    ) {
         if (state.loading) {
             LoadingSpinner()
-            return@Box
+            return@Column
         }
 
         if (state.error != null && state.details == null) {
@@ -133,243 +134,496 @@ fun WatchScreen(
                 actionText = "Back",
                 onAction = onBackClick,
             )
-            return@Box
+            return@Column
         }
 
-        // Player surface — fills the screen
-        AndroidView(
+        LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player
-                    useController = true
-                    setFullscreenButtonClickListener { /* delegate to system */ }
-                    controllerAutoShow = true
-                    controllerHideOnTouch = true
-                    setShowNextButton(true)
-                    setShowPreviousButton(true)
-                }
-            },
-        )
-
-        // Top-left back + top-right comments toggle
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
         ) {
-            IconButton(
-                onClick = onBackClick,
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.4f), CircleShape),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-            }
-            Spacer(Modifier.weight(1f))
-            if (Config.Player.COMMENTS_ENABLED) {
-                IconButton(
-                    onClick = { showComments = !showComments },
+            // ── Player (site: player-glass rounded-2xl, 16:9) ──────────────
+            item(key = "player") {
+                Box(
                     modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.4f), CircleShape),
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .background(Color.Black)
                 ) {
-                    Icon(Icons.Filled.ChatBubble, contentDescription = "Comments", tint = Color.White)
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
+                                this.player = player
+                                useController = true
+                                controllerAutoShow = true
+                                controllerHideOnTouch = true
+                                setShowNextButton(true)
+                                setShowPreviousButton(true)
+                            }
+                        },
+                    )
+                    // Back button overlay.
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x66000000))
+                            .clickable(onClick = onBackClick),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    if (state.streamLoading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(32.dp),
+                        )
+                    }
                 }
             }
-        }
 
-        // Episode switcher bar (overlay, bottom) — visible while paused
-        if (state.totalEpisodes > 1) {
-            EpisodeSwitcherBar(
-                episode = state.episode,
-                total = state.totalEpisodes,
-                onPrev = { viewModel.switchEpisode(state.episode - 1) },
-                onNext = { viewModel.switchEpisode(state.episode + 1) },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .padding(bottom = 88.dp),
-            )
-        }
-
-        // Stream loading / fallback notice
-        if (state.streamLoading) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(
-                        color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = "Loading stream…",
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+            // ── Meta row: EP chip + views + actions ────────────────────────
+            item(key = "meta") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        // EP chip — site: rounded-xl border-white/6 bg-white/3 px-4 py-1.5.
+                        Text(
+                            text = "EP ${state.episode}",
+                            style = WebTextStyles.base,
+                            color = theme.fg,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0x08FFFFFF))
+                                .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                        )
+                        state.viewCount?.let { vc ->
+                            Text(
+                                text = "%,d views".format(vc),
+                                style = WebTextStyles.xs,
+                                color = Color(0xFF71717A),
+                            )
+                        }
+                    }
+                    // Refresh stream (re-resolve sources for this episode).
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x08FFFFFF))
+                            .clickable { viewModel.reloadStream() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Reload",
+                            tint = theme.fgMuted,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
             }
-        }
 
-        state.streamError?.let { message ->
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(24.dp),
-                color = Color.Black.copy(alpha = 0.82f),
-                shape = RoundedCornerShape(12.dp),
-            ) {
+            // ── Server panel (site: rounded-2xl border bg-white/3 p-3) ──────
+            item(key = "servers") {
                 Column(
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0x08FFFFFF))
+                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
+                        .padding(12.dp),
                 ) {
-                    Text("Playback unavailable", color = Color.White, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text(message, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(10.dp))
-                    Text("Try another episode or provider.", color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                    ) {
+                        Text(
+                            text = "Servers (${state.servers.size.coerceAtLeast(1)})",
+                            style = WebTextStyles.base,
+                            color = theme.fg,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        // SUB / DUB segmented (site: btn-xs, active bg-action).
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0x14FFFFFF))
+                                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(8.dp)),
+                        ) {
+                            LangChip(
+                                label = "SUB",
+                                active = state.streamLang == "sub",
+                                onClick = { viewModel.setStreamLang("sub") },
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .width(1.dp)
+                                    .height(20.dp)
+                                    .background(Color(0x14FFFFFF))
+                            )
+                            LangChip(
+                                label = "DUB",
+                                active = state.streamLang == "dub",
+                                onClick = { viewModel.setStreamLang("dub") },
+                            )
+                        }
+                    }
+                    // Server chips (site: flex-wrap gap-2 rounded-lg bg-white/5).
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        val serverList = state.servers.ifEmpty { listOf(state.streamServer) }
+                        serverList.take(4).forEach { server ->
+                            val active = server == state.streamServer
+                            Text(
+                                text = server,
+                                style = WebTextStyles.xs,
+                                color = if (active) theme.actionFg else Color(0xFFA1A1AA),
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (active) theme.action else Color(0x0DFFFFFF))
+                                    .clickable { viewModel.setStreamServer(server) }
+                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
                 }
             }
-        }
 
-        // Comments panel (right-side sheet, like the site's comment section)
-        AnimatedVisibility(
-            visible = showComments,
-            enter = slideInHorizontally(tween(220)) { it / 2 } + fadeIn(tween(220)),
-            exit = slideOutHorizontally(tween(180)) { it / 2 } + fadeOut(tween(180)),
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxHeight(0.9f)
-                .padding(vertical = 56.dp, horizontal = 12.dp),
-        ) {
-            CommentsPanel(
-                state = state.comments,
-                episode = state.episode,
-                viewCount = state.viewCount,
-                onRefresh = viewModel::refreshComments,
-                onClose = { showComments = false },
+            // ── Mobile tabs (site: Episodes | Comments) ─────────────────────
+            item(key = "tabs") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x08FFFFFF))
+                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    TabChip(
+                        icon = Icons.Default.List,
+                        label = "Episodes",
+                        count = state.episodes.size,
+                        active = tab == 0,
+                        onClick = { tab = 0 },
+                        modifier = Modifier.weight(1f),
+                    )
+                    TabChip(
+                        icon = Icons.Default.ChatBubble,
+                        label = "Comments",
+                        count = state.comments.total,
+                        active = tab == 1,
+                        onClick = { tab = 1 },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            if (tab == 0) {
+                // ── Episode rows (site: h-76, active state ring) ────────────
+                items(state.episodes, key = { it.number }) { ep ->
+                    EpisodeRow(
+                        ep = ep,
+                        active = ep.number == state.episode,
+                        onClick = { viewModel.switchEpisode(ep.number) },
+                    )
+                }
+            } else {
+                // ── Comments ────────────────────────────────────────────────
+                item(key = "comments") {
+                    CommentsSection(
+                        state = state.comments,
+                        episode = state.episode,
+                        onRefresh = viewModel::refreshComments,
+                    )
+                }
+            }
+
+            item(key = "bottom-space") { Spacer(Modifier.height(96.dp)) }
+        }
+    }
+}
+
+/** site: .mobile-tab — icon + label + count badge, active = bg-action. */
+@Composable
+private fun TabChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    count: Int,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val theme = LocalAnikageTheme.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (active) theme.action else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (active) theme.actionFg else theme.fgMuted,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = label,
+            style = WebTextStyles.xs,
+            color = if (active) theme.actionFg else theme.fgMuted,
+            fontWeight = FontWeight.Medium,
+        )
+        if (count > 0) {
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = count.toString(),
+                style = WebTextStyles.xs2,
+                color = if (active) theme.actionFg.copy(alpha = 0.60f) else theme.fgMuted.copy(alpha = 0.60f),
             )
         }
     }
 }
 
+/** site: SUB/DUB chip — active bg-action text-action-fg, btn-xs. */
 @Composable
-private fun EpisodeSwitcherBar(
-    episode: Int,
-    total: Int,
-    onPrev: () -> Unit,
-    onNext: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun LangChip(label: String, active: Boolean, onClick: () -> Unit) {
+    val theme = LocalAnikageTheme.current
+    Text(
+        text = label,
+        style = WebTextStyles.xs,
+        color = if (active) theme.actionFg else Color(0xFF71717A),
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.8.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (active) theme.action else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    )
+}
+
+/** site episode row — h-76 thumb + play overlay + title + desc. */
+@Composable
+private fun EpisodeRow(
+    ep: EpisodeItem,
+    active: Boolean,
+    onClick: () -> Unit,
 ) {
+    val theme = LocalAnikageTheme.current
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .background(Color.Black.copy(alpha = 0.5f), shape = RoundedCornerShape(24.dp))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (active) Color(0x14FFFFFF) else Color.Transparent)
+            .border(
+                1.dp,
+                if (active) Color(0x26FFFFFF) else Color.Transparent,
+                RoundedCornerShape(12.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        IconButton(onClick = onPrev, enabled = episode > 1) {
-            Icon(Icons.Default.SkipPrevious, contentDescription = "Previous episode", tint = Color.White)
+        Box(
+            modifier = Modifier
+                .height(76.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(theme.surfaceElevated),
+        ) {
+            ep.thumbnail?.let { thumb ->
+                AsyncImage(
+                    model = thumb,
+                    contentDescription = "Episode ${ep.number}",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            // Active episode: play overlay + EP badge.
+            if (active) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0x66000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+            }
+            Text(
+                text = "EP ${ep.number}",
+                style = WebTextStyles.xs2,
+                color = theme.fg,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(theme.surface.copy(alpha = 0.85f))
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+            )
         }
-        Text(
-            text = "Episode $episode / $total",
-            color = Color.White,
-            style = MaterialTheme.typography.labelMedium,
-        )
-        IconButton(onClick = onNext, enabled = episode < total) {
-            Icon(Icons.Default.SkipNext, contentDescription = "Next episode", tint = Color.White)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp),
+        ) {
+            Text(
+                text = if (ep.title.startsWith("Episode")) "${ep.number}." else ep.title,
+                style = WebTextStyles.sm,
+                color = if (active) theme.fg.copy(alpha = 0.90f) else theme.fg,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (ep.isFiller) {
+                Text(
+                    text = "Filler",
+                    style = WebTextStyles.xs,
+                    color = Color(0xFFFB923C),
+                )
+            } else if (ep.isRecap) {
+                Text(
+                    text = "Recap",
+                    style = WebTextStyles.xs,
+                    color = theme.fgMuted,
+                )
+            }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-//  Comments panel — mirrors the site's episode comment section
+//  Comments — site: header card ("N Comments" + EP pill) + list
 // ---------------------------------------------------------------------------
 
 private val AvatarBase = "https://auth.anikage.cc"
 
 @Composable
-private fun CommentsPanel(
+private fun CommentsSection(
     state: CommentsUiState,
     episode: Int,
-    viewCount: Long?,
     onRefresh: () -> Unit,
-    onClose: () -> Unit,
 ) {
-    Surface(
-        color = Color(0xE6060912),
-        contentColor = Color.White,
-        shape = RoundedCornerShape(16.dp),
+    val theme = LocalAnikageTheme.current
+    Column(
         modifier = Modifier
-            .width(320.dp)
-            .fillMaxHeight(),
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header
+        // Header card (site: rounded-xl border-white/8 bg-white/[0.02]).
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0x05FFFFFF))
+                .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp))
+                .padding(10.dp),
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(
-                    text = buildString {
-                        append("Comments — Ep $episode")
-                        viewCount?.let { append("  ·  $it views") }
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                IconButton(onClick = onRefresh, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh comments", tint = Color.White, modifier = Modifier.size(16.dp))
-                }
-                IconButton(onClick = onClose, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close comments", tint = Color.White, modifier = Modifier.size(18.dp))
-                }
-            }
-
-            // List
-            if (state.loading && state.comments.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 40.dp),
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x0AFFFFFF)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
-                }
-            } else if (state.comments.isEmpty()) {
-                Box(modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp), contentAlignment = Alignment.Center) {
-                    Text(
-                        "No comments yet on this episode.",
-                        color = Color.White.copy(alpha = 0.6f),
-                        style = MaterialTheme.typography.bodyMedium,
+                    Icon(
+                        Icons.Default.ChatBubble,
+                        contentDescription = null,
+                        tint = Color(0xFFD4D4D8),
+                        modifier = Modifier.size(14.dp),
                     )
                 }
-            } else {
-                LazyColumn(
-                    state = rememberLazyListState(),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Transparent),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        horizontal = 12.dp, vertical = 4.dp,
-                    ),
-                ) {
-                    items(state.comments, key = { it.id }) { comment ->
-                        CommentRow(comment)
-                    }
+                Column {
+                    Text(
+                        text = "${state.total} Comments",
+                        style = WebTextStyles.base,
+                        color = theme.fg,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = "Talk about this episode without spoiling others.",
+                        style = WebTextStyles.sm,
+                        color = Color(0xFF71717A),
+                    )
                 }
+            }
+            Text(
+                text = "EP $episode",
+                style = WebTextStyles.xs,
+                color = Color(0xFFD4D4D8),
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0x08FFFFFF))
+                    .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(50))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+
+        if (state.loading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = theme.action, strokeWidth = 2.dp)
+            }
+        } else if (state.comments.isEmpty()) {
+            Text(
+                text = "No comments yet — be the first to share your thoughts.",
+                style = WebTextStyles.sm,
+                color = theme.fgMuted,
+                modifier = Modifier.padding(16.dp),
+            )
+        } else {
+            state.comments.forEach { comment ->
+                CommentRow(comment)
             }
         }
     }
@@ -377,113 +631,62 @@ private fun CommentsPanel(
 
 @Composable
 private fun CommentRow(comment: AnikageComment) {
+    val theme = LocalAnikageTheme.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Avatar
-        val avatarUrl = comment.author?.avatar?.let { path ->
-            if (path.startsWith("http")) path else "$AvatarBase$path"
-        }
-        if (avatarUrl != null) {
-            AsyncImage(
-                model = avatarUrl,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(32.dp)
-                    .background(Color(0xFF161D2E), CircleShape),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .background(Color(0xFFA855F7).copy(alpha = 0.4f), CircleShape),
-                contentAlignment = Alignment.Center,
+        AsyncImage(
+            model = comment.author?.avatar?.let { "$AvatarBase$it" },
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(theme.surfaceElevated),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = (comment.author?.displayName ?: "?").take(1).uppercase(),
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = comment.author?.displayName ?: comment.author?.username ?: "Anonymous",
+                    style = WebTextStyles.xs,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
                 )
-            }
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = comment.author?.displayName ?: comment.author?.username ?: "Anon",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = if (comment.author?.role == "admin" || comment.author?.role == "mod")
-                        Color(0xFFE64158) else Color.White,
-                )
-                if (comment.isPinned) {
-                    Spacer(Modifier.width(6.dp))
-                    Text("PIN", color = Color(0xFFFACC15), fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.weight(1f))
                 Text(
                     text = relativeTime(comment.createdAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.5f),
+                    style = WebTextStyles.xs,
+                    color = theme.fgMuted,
                 )
             }
-            Spacer(Modifier.height(2.dp))
             Text(
                 text = comment.content,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.9f),
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
+                style = WebTextStyles.sm,
+                color = Color(0xFFD4D4D8),
+                lineHeight = 19.5.sp,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "▲ ${comment.likeCount}  ▼ ${comment.dislikeCount}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.55f),
-                )
-                if (comment.replyCount > 0) {
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = "${comment.replyCount} replies",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.55f),
-                    )
-                }
-                if (comment.isSpoiler) {
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        "SPOILER",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFFACC15),
-                        fontSize = 9.sp,
-                    )
-                }
-            }
         }
     }
 }
 
-/** "2h ago" style timestamps from ISO-8601 strings. */
 private fun relativeTime(iso: String?): String {
-    if (iso.isNullOrBlank()) return ""
+    if (iso == null) return ""
     return try {
-        val instant = Instant.parse(iso)
-        val duration = Duration.between(instant, Instant.now())
-        val minutes = duration.toMinutes()
+        val then = Instant.parse(iso)
+        val dur = Duration.between(then, Instant.now())
+        val minutes = dur.toMinutes()
         when {
-            minutes < 1 -> "now"
-            minutes < 60 -> "${minutes}m"
-            minutes < 60 * 24 -> "${minutes / 60}h"
-            minutes < 60 * 24 * 30 -> "${minutes / (60 * 24)}d"
-            minutes < 60 * 24 * 365 -> "${minutes / (60 * 24 * 30)}mo"
-            else -> "${minutes / (60 * 24 * 365)}y"
+            minutes < 1 -> "just now"
+            minutes < 60 -> "${minutes}m ago"
+            minutes < 60 * 24 -> "${minutes / 60}h ago"
+            else -> "${minutes / (60 * 24)}d ago"
         }
     } catch (_: Exception) {
-        iso.take(10)
+        ""
     }
 }

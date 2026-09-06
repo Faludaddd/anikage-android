@@ -40,10 +40,10 @@ object Config {
     const val APP_SHORT_NAME = "Anikage"
 
     /** Version label (shown in About). */
-    const val APP_VERSION = "1.5.7"
+    const val APP_VERSION = "1.6.0"
 
     /** Version code (integer; bump for every release). */
-    const val APP_VERSION_CODE = 13
+    const val APP_VERSION_CODE = 14
 
     /** About / credits line. */
     val ABOUT_TEXT =
@@ -185,83 +185,367 @@ object Config {
         "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
 
     // -----------------------------------------------------------------------
-    //  Theme — Material 3 colour scheme
+    //  Theme — EXACT replication of the Anikage website theme system.
     //
-    //  These are the EXACT colours extracted from the live Anikage website:
-    //  - body background-color: rgb(6, 9, 18) = #060912 (their "midnight" theme)
-    //  - body color: white
-    //  - body font: Rubik, sans-serif 14.59px
-    //  - h2 font-weight: 560 (Rubik supports the full 300-900 range)
-    //  - Lucide icons with stroke-width 2
-    //  Edit these and the entire UI rebrands.
+    //  The site ships 11 selectable themes (default + 10 accent themes) as
+    //  CSS variable sets on <html data-theme="...">. Every token below was
+    //  extracted verbatim from the live site's compiled CSS
+    //  (_app/immutable/assets/0.*.css, [data-theme=...] blocks) on 2026-09-06.
+    //
+    //  The DEFAULT theme (data-theme="default", class "dark") is a neutral
+    //  dark surface set with a WHITE action colour — white primary buttons
+    //  with near-black text — exactly like a first-visit anikage.cc.
     // -----------------------------------------------------------------------
 
+    /**
+     * One Anikage web theme — a 1:1 port of a `[data-theme=...]` CSS block.
+     */
+    data class WebTheme(
+        val key: String,
+        val label: String,
+        val surface: Color,
+        val surfaceCard: Color,
+        val surfaceCardHover: Color,
+        val surfaceElevated: Color,
+        val surfaceInput: Color,
+        val fg: Color,
+        val fgMuted: Color,
+        val action: Color,
+        val actionFg: Color,
+        val accent: Color,
+        val accentDeep: Color,
+        val accentInfo: Color,
+        val danger: Color,
+        val ringFocus: Color,
+        val aurora1: Color,
+        val aurora2: Color,
+        val aurora3: Color,
+    )
+
     object Theme {
-        // Brand — accent colour used for chips, primary buttons, progress bars.
-        val primary = Color(0xFFE64158)        // Anikage accent (red-pink)
-        val secondary = Color(0xFFA855F7)      // Secondary (purple)
-        val tertiary = Color(0xFFF472B6)      // Tertiary (pink)
 
-        // Surfaces — the actual midnight theme extracted from Anikage.
-        // (background = rgb(6,9,18) from the live site's body computed style)
-        val background = Color(0xFF060912)    // Page background — "midnight" theme
-        val surface = Color(0xFF0E1422)       // Cards, dialogs (slightly elevated)
-        val surfaceVariant = Color(0xFF161D2E) // Subtle raised surface
-        val surfaceElevated = Color(0xFF1F2841) // Hover/selected state
+        /** Neutral dark default — what anikage.cc serves on first visit. */
+        val DEFAULT = WebTheme(
+            key = "default", label = "Default",
+            surface = Color(0xFF0A0A0A),
+            surfaceCard = Color(0xFF151515),
+            surfaceCardHover = Color(0x14FFFFFF),
+            surfaceElevated = Color(0xFF1A1A1A),
+            surfaceInput = Color(0xFF27272A),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFFFFFFFF),
+            actionFg = Color(0xFF0A0A0A),
+            accent = Color(0xFFFFFFFF),
+            accentDeep = Color(0xFF2A2A2A),
+            accentInfo = Color(0xFFBFBFBF),
+            danger = Color(0xFF812435),
+            ringFocus = Color(0xFFFFFFFF),
+            aurora1 = Color(0xFFA3A3A3),
+            aurora2 = Color(0xFF525252),
+            aurora3 = Color(0xFF737373),
+        )
 
-        // Text
-        val onBackground = Color(0xFFFFFFFF)
-        val onSurface = Color(0xFFFFFFFF)
-        val onSurfaceVariant = Color(0xFFB3B3B3)
-        val outline = Color(0xFF404040)
+        val MIDNIGHT = WebTheme(
+            key = "midnight", label = "Midnight",
+            surface = Color(0xFF060912),
+            surfaceCard = Color(0xFF0F1424),
+            surfaceCardHover = Color(0x1478A0FF),
+            surfaceElevated = Color(0xFF161D35),
+            surfaceInput = Color(0xFF1A2138),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFF6E90FF),
+            actionFg = Color(0xFF060912),
+            accent = Color(0xFF6E90FF),
+            accentDeep = Color(0xFF1E3A8A),
+            accentInfo = Color(0xFF3C83F6),
+            danger = Color(0xFF7F1D2E),
+            ringFocus = Color(0xFF60A5FA),
+            aurora1 = Color(0xFF6E90FF),
+            aurora2 = Color(0xFF4A6FE1),
+            aurora3 = Color(0xFF93B3FF),
+        )
 
-        // Error
-        val error = Color(0xFFEF4444)
-        val onError = Color(0xFFFFFFFF)
+        val CRIMSON = WebTheme(
+            key = "crimson", label = "Crimson",
+            surface = Color(0xFF0C0707),
+            surfaceCard = Color(0xFF1A0F10),
+            surfaceCardHover = Color(0x14FF786E),
+            surfaceElevated = Color(0xFF221416),
+            surfaceInput = Color(0xFF2A1416),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFFE64158),
+            actionFg = Color(0xFFFFFFFF),
+            accent = Color(0xFFE64158),
+            accentDeep = Color(0xFF9B1C2E),
+            accentInfo = Color(0xFFF5683D),
+            danger = Color(0xFF4D0F17),
+            ringFocus = Color(0xFFFF7A85),
+            aurora1 = Color(0xFFE64158),
+            aurora2 = Color(0xFFFF6B7D),
+            aurora3 = Color(0xFFC0293F),
+        )
 
-        // Misc
-        val success = Color(0xFF22C55E)
-        val warning = Color(0xFFF59E0B)
+        val EMERALD = WebTheme(
+            key = "emerald", label = "Emerald",
+            surface = Color(0xFF06100C),
+            surfaceCard = Color(0xFF0D1C17),
+            surfaceCardHover = Color(0x146EE6B4),
+            surfaceElevated = Color(0xFF11251C),
+            surfaceInput = Color(0xFF142D24),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFF2DBF8F),
+            actionFg = Color(0xFF04130D),
+            accent = Color(0xFF2DBF8F),
+            accentDeep = Color(0xFF126B48),
+            accentInfo = Color(0xFF17CF91),
+            danger = Color(0xFF7F1D2E),
+            ringFocus = Color(0xFF34D399),
+            aurora1 = Color(0xFF2DBF8F),
+            aurora2 = Color(0xFF5FDCAF),
+            aurora3 = Color(0xFF197555),
+        )
+
+        val AMOLED = WebTheme(
+            key = "amoled", label = "Amoled",
+            surface = Color(0xFF000000),
+            surfaceCard = Color(0xFF0A0A0A),
+            surfaceCardHover = Color(0x0FFFFFFF),
+            surfaceElevated = Color(0xFF141414),
+            surfaceInput = Color(0xFF1A1A1A),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFFFFFFFF),
+            actionFg = Color(0xFF000000),
+            accent = Color(0xFFFFFFFF),
+            accentDeep = Color(0xFF2A2A2A),
+            accentInfo = Color(0xFFCCCCCC),
+            danger = Color(0xFF5A1622),
+            ringFocus = Color(0xFFFFFFFF),
+            aurora1 = Color(0xFF707070),
+            aurora2 = Color(0xFF4A4A4A),
+            aurora3 = Color(0xFF9A9A9A),
+        )
+
+        val SUNSET = WebTheme(
+            key = "sunset", label = "Sunset",
+            surface = Color(0xFF0E0805),
+            surfaceCard = Color(0xFF1C110A),
+            surfaceCardHover = Color(0x14FFAA6E),
+            surfaceElevated = Color(0xFF251610),
+            surfaceInput = Color(0xFF2C1A10),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFFE07238),
+            actionFg = Color(0xFFFFFFFF),
+            accent = Color(0xFFE07238),
+            accentDeep = Color(0xFFB54A14),
+            accentInfo = Color(0xFFF68D31),
+            danger = Color(0xFF7F1D1D),
+            ringFocus = Color(0xFFFBBF24),
+            aurora1 = Color(0xFFE07238),
+            aurora2 = Color(0xFFF5985C),
+            aurora3 = Color(0xFFB54A14),
+        )
+
+        val ROSE = WebTheme(
+            key = "rose", label = "Rose",
+            surface = Color(0xFF0D0810),
+            surfaceCard = Color(0xFF1A0F1D),
+            surfaceCardHover = Color(0x14FF8CC8),
+            surfaceElevated = Color(0xFF221428),
+            surfaceInput = Color(0xFF2A1530),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFFE0489A),
+            actionFg = Color(0xFFFFFFFF),
+            accent = Color(0xFFE0489A),
+            accentDeep = Color(0xFF9D174D),
+            accentInfo = Color(0xFFED5EA6),
+            danger = Color(0xFF7F1D2E),
+            ringFocus = Color(0xFFF472B6),
+            aurora1 = Color(0xFFE0489A),
+            aurora2 = Color(0xFFF273B8),
+            aurora3 = Color(0xFFBE2D7C),
+        )
+
+        val GALAXY = WebTheme(
+            key = "galaxy", label = "Galaxy",
+            surface = Color(0xFF0C0414),
+            surfaceCard = Color(0xFF150A24),
+            surfaceCardHover = Color(0x1AA855F7),
+            surfaceElevated = Color(0xFF1C1528),
+            surfaceInput = Color(0xFF251E38),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFFA855F7),
+            actionFg = Color(0xFFFFFFFF),
+            accent = Color(0xFFA855F7),
+            accentDeep = Color(0xFF581C87),
+            accentInfo = Color(0xFFA65EED),
+            danger = Color(0xFF7F1D3A),
+            ringFocus = Color(0xFFC084FC),
+            aurora1 = Color(0xFFA855F7),
+            aurora2 = Color(0xFF6366F1),
+            aurora3 = Color(0xFF3B82F6),
+        )
+
+        val OCEAN = WebTheme(
+            key = "ocean", label = "Ocean",
+            surface = Color(0xFF040E1A),
+            surfaceCard = Color(0xFF0A1929),
+            surfaceCardHover = Color(0x1400C8FF),
+            surfaceElevated = Color(0xFF0F2236),
+            surfaceInput = Color(0xFF142D45),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFF06B6D4),
+            actionFg = Color(0xFFFFFFFF),
+            accent = Color(0xFF06B6D4),
+            accentDeep = Color(0xFF0E4D6E),
+            accentInfo = Color(0xFF0DC4F2),
+            danger = Color(0xFF7F1D2E),
+            ringFocus = Color(0xFF22D3EE),
+            aurora1 = Color(0xFF06B6D4),
+            aurora2 = Color(0xFF0EA5E9),
+            aurora3 = Color(0xFF6366F1),
+        )
+
+        val SAKURA = WebTheme(
+            key = "sakura", label = "Sakura",
+            surface = Color(0xFF100810),
+            surfaceCard = Color(0xFF1C0F1C),
+            surfaceCardHover = Color(0x14FB92B4),
+            surfaceElevated = Color(0xFF261428),
+            surfaceInput = Color(0xFF321A34),
+            fg = Color(0xFFFFFFFF),
+            fgMuted = Color(0xB3FFFFFF),
+            action = Color(0xFFF472B6),
+            actionFg = Color(0xFFFFFFFF),
+            accent = Color(0xFFF472B6),
+            accentDeep = Color(0xFF831843),
+            accentInfo = Color(0xFFEF5D8D),
+            danger = Color(0xFF7F1D2E),
+            ringFocus = Color(0xFFF9A8D4),
+            aurora1 = Color(0xFFF472B6),
+            aurora2 = Color(0xFFC084FC),
+            aurora3 = Color(0xFF818CF8),
+        )
+
+        val AMBER = WebTheme(
+            key = "amber", label = "Amber",
+            surface = Color(0xFF0C0A06),
+            surfaceCard = Color(0xFF161208),
+            surfaceCardHover = Color(0x14F59E0B),
+            surfaceElevated = Color(0xFF1A1508),
+            surfaceInput = Color(0xFF2A2310),
+            fg = Color(0xFFE5E5E5),
+            fgMuted = Color(0xFFA3A3A3),
+            action = Color(0xFFF59E0B),
+            actionFg = Color(0xFF000000),
+            accent = Color(0xFFF59E0B),
+            accentDeep = Color(0xFF92400E),
+            accentInfo = Color(0xFFF59F0A),
+            danger = Color(0xFF991B1B),
+            ringFocus = Color(0xFFF59E0B),
+            aurora1 = Color(0xFFF59E0B),
+            aurora2 = Color(0xFFFBBF24),
+            aurora3 = Color(0xFFB45309),
+        )
+
+        /** All site themes in picker order (default first). */
+        val ALL = listOf(
+            DEFAULT, MIDNIGHT, CRIMSON, EMERALD, AMOLED,
+            SUNSET, ROSE, GALAXY, OCEAN, SAKURA, AMBER,
+        )
+
+        fun byKey(key: String): WebTheme = ALL.find { it.key == key } ?: DEFAULT
+
+        // ---- Convenience aliases mapped onto the ACTIVE theme -------------
+        // (These read the runtime-selected theme so legacy call sites keep
+        // working; new code should prefer LocalAnikageTheme.)
+        var active: WebTheme = DEFAULT
+
+        val primary: Color get() = active.action
+        val secondary: Color get() = active.accentInfo
+        val tertiary: Color get() = active.aurora2
+        val background: Color get() = active.surface
+        val surface: Color get() = active.surfaceCard
+        val surfaceVariant: Color get() = active.surfaceElevated
+        val surfaceElevated: Color get() = active.surfaceElevated
+        val onBackground: Color get() = active.fg
+        val onSurface: Color get() = active.fg
+        val onSurfaceVariant: Color get() = active.fgMuted
+        val outline: Color get() = active.fgMuted.copy(alpha = 0.25f)
+        val error: Color get() = active.danger
+        val onError: Color get() = Color(0xFFFFFFFF)
+
+        // Fixed semantic colours shared by every website theme.
+        val success = Color(0xFF22C55E)      // green-500 (site "Aired"/releasing dots)
+        val warning = Color(0xFFF59E0B)      // amber-500
         val info = Color(0xFF5D61E5)
-        val star = Color(0xFFFACC15)          // yellow-400 (Anikage uses for score chips)
+        val star = Color(0xFFFACC15)         // yellow-400 (score chips)
+        val releasing = Color(0xFF4ADE80)    // green-400 dot
+        val releasingDim = Color(0xFF22C55E) // green-500 border
+        val finished = Color(0xFFFB7185)     // rose-400 dot
+        val finishedDim = Color(0xFFF43F5E)  // rose-500 border
 
-        /** Glassy overlay (used for hero banners gradients). */
-        val scrim = Color(0xCC000000)         // 80% black
-        val scrimLight = Color(0x66000000)    // 40% black
+        /** Glassy overlay (used for hero banner gradients). */
+        val scrim = Color(0xCC000000)        // 80% black
+        val scrimLight = Color(0x66000000)   // 40% black
 
         /**
          * Whether the app starts in dark mode by default.
-         * Dark = true is recommended because the design uses dark surfaces
-         * as the dominant colour.
+         * (The website is dark-only.)
          */
         const val DEFAULT_DARK_MODE = true
+
+        /** Persisted theme key ("default", "midnight", ...). */
+        const val PREFS_KEY = "anikage_theme"
     }
 
     // -----------------------------------------------------------------------
-    //  Typography
+    //  Typography — 1:1 port of the website's fluid clamp() scale.
+    //
+    //  The site uses the system font stack (Roboto on Android), NOT a custom
+    //  webfont, with fluid sizes clamped by viewport width. [fluidSp]
+    //  reproduces the clamp formula against the device screen width.
     // -----------------------------------------------------------------------
 
     object Typography {
-        /** Default font family. Use [FontFamily.Default] in code; the manifest
-         *  doesn't force a specific family. Anikage uses Rubik on the web. */
-        const val USE_RUBIK = true   // Will use the bundled Rubik font in res/font/
+        /** Default font family — system (Roboto on Android), like the site. */
+        const val USE_RUBIK = false
 
-        // Text sizes (in sp) — used by ui/theme/Type.kt
+        /**
+         * Port of CSS clamp(min, preferred, max): scales `preferred` with the
+         * screen width between the two bounds. Screen width is in dp and the
+         * site's vw maps 1:1 to dp on Android.
+         */
+        fun fluidSp(screenWidthDp: Int, min: Float, preferred: Float, max: Float): Float {
+            val scaled = preferred * screenWidthDp / 100f
+            return scaled.coerceIn(min, max)
+        }
+
+        // Text sizes (in sp) — base values at phone width; Type.kt applies the
+        // fluid variant at runtime. Values mirror the site's clamp tokens.
         val displayLarge = 32.sp
         val displayMedium = 28.sp
         val displaySmall = 24.sp
         val headlineLarge = 22.sp
         val headlineMedium = 20.sp
         val headlineSmall = 18.sp
-        val titleLarge = 18.sp
-        val titleMedium = 16.sp
-        val titleSmall = 14.sp
-        val bodyLarge = 16.sp
-        val bodyMedium = 14.sp
-        val bodySmall = 12.sp
+        val titleLarge = 17.sp   // text-xl (title-section) at phone width
+        val titleMedium = 15.sp  // text-lg
+        val titleSmall = 14.sp   // text-base
+        val bodyLarge = 14.sp    // text-sm
+        val bodyMedium = 13.sp
+        val bodySmall = 11.sp    // text-xs
         val labelLarge = 14.sp
         val labelMedium = 12.sp
-        val labelSmall = 11.sp
+        val labelSmall = 10.sp   // text-2xs
     }
 
     // -----------------------------------------------------------------------
@@ -471,7 +755,7 @@ object Config {
         const val ENABLE_MUSIC_SCREEN = true
 
         /** Torrents tab — Anikage has this (links to Nyaa.si etc.). Disabled by default for legal reasons. */
-        const val ENABLE_TORRENTS_SCREEN = false
+        const val ENABLE_TORRENTS_SCREEN = true
 
         /** Continue Watching rail on Home — uses locally-stored watch history. */
         const val ENABLE_CONTINUE_WATCHING = true
