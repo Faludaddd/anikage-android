@@ -206,9 +206,10 @@ class WatchViewModel(
                         title = details.displayTitle(),
                     )
                     // Slug: prefer the one carried in from the originating
-                    // screen (site payloads always have it); resolve by title
-                    // search only as a fallback.
-                    var slug = _state.value.slug
+                    // screen, then the one embedded in the details payload
+                    // (Anikage info path); resolve by title search only as
+                    // the last resort.
+                    var slug = _state.value.slug ?: details.slug
                     if (slug == null) {
                         slug = repo.resolveSlug(
                             animeId,
@@ -216,7 +217,7 @@ class WatchViewModel(
                             details.title.romaji,
                         )
                     } else {
-                        AppLogger.d(LogCategory.PLAYER, "Using carried-in slug '$slug' (no search needed)")
+                        AppLogger.d(LogCategory.PLAYER, "Using known slug '$slug' (no search needed)")
                     }
                     if (slug != null) {
                         if (_state.value.slug != slug) {
@@ -249,7 +250,8 @@ class WatchViewModel(
                     AppLogger.e(LogCategory.PLAYER, "Failed to load anime (id=$animeId)", e)
                     _state.value = _state.value.copy(
                         loading = false,
-                        error = e.message ?: "Failed to load anime.",
+                        error = (e as? com.anikage.app.core.data.api.ApiHttpException)?.userMessage()
+                            ?: e.message ?: "Failed to load anime.",
                     )
                 }
             )

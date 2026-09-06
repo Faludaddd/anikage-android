@@ -88,6 +88,8 @@ data class AnikageCover(
     val large: String? = null,
     val medium: String? = null,
     val extraLarge: String? = null,
+    /** Present inside the cover object in schedule-media payloads. */
+    val color: String? = null,
 ) {
     fun best(): String? = extraLarge ?: large ?: medium
 }
@@ -379,4 +381,155 @@ data class AnikageMusicAudio(
 @Serializable
 data class AnikageMusicAnimeResponse(
     val anime: AnikageMusicAnime = AnikageMusicAnime(),
+)
+
+// ---------------------------------------------------------------------------
+//  Anime info — GET /api/media/anime/{slug}
+//
+//  The payload behind the site's /anime/info/{slug} page. This is the
+//  website's OWN data source for anime details (served by the Anikage
+//  backend, which mirrors AniList server-side) — using it means the app's
+//  details pages work exactly like the site's, and keep working even when
+//  the public AniList GraphQL API is unreachable (it was globally disabled
+//  with HTTP 403 "temporarily disabled due to severe stability issues"
+//  when this endpoint was introduced).
+//
+//  Shape (live-verified):
+//    { "anime": { slug, anilistId, malId, title{…}, coverImage{…},
+//      coverColor, bannerImage, fanart, clearLogo, trailerId, description,
+//      averageScore, meanScore, popularity, favourites, format, status,
+//      totalEpisodes, duration, season, year, genres[], startDate, endDate,
+//      nextAiringEpisode{…}, studios[], characters[], relations[],
+//      recommendations[], tags[], … }, "banned": false }
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class AnikageInfoResponse(
+    val anime: AnikageInfoAnime? = null,
+    val banned: Boolean = false,
+)
+
+@Serializable
+data class AnikageInfoAnime(
+    val slug: String? = null,
+    val anilistId: Int? = null,
+    val malId: Int? = null,
+    val title: AnikageTitle = AnikageTitle(),
+    val coverImage: AnikageCover = AnikageCover(),
+    val coverColor: String? = null,
+    val bannerImage: String? = null,
+    /** TVDB background artwork (site hero). */
+    val fanart: String? = null,
+    /** Transparent title logo (site hero). */
+    val clearLogo: String? = null,
+    val trailerId: String? = null,
+    val description: String? = null,
+    val averageScore: Int? = null,
+    val meanScore: Int? = null,
+    val popularity: Int? = null,
+    val favourites: Int? = null,
+    val format: String? = null,
+    val status: String? = null,
+    val totalEpisodes: Int? = null,
+    val duration: Int? = null,
+    val season: String? = null,
+    val year: Int? = null,
+    val genres: List<String> = emptyList(),
+    /** Format "Sep 29, 2023" — parsed leniently on mapping. */
+    val startDate: String? = null,
+    val endDate: String? = null,
+    val nextAiringEpisode: AnikageAiringEpisode? = null,
+    val studios: List<AnikageStudio> = emptyList(),
+    val characters: List<AnikageCharacter> = emptyList(),
+    val relations: List<AnikageRelationRef> = emptyList(),
+    val recommendations: List<AnikageRelationRef> = emptyList(),
+    val countryOfOrigin: String? = null,
+    val source: String? = null,
+    val isAdult: Boolean = false,
+    val type: String? = null,
+)
+
+@Serializable
+data class AnikageStudio(
+    val anilistId: Int? = null,
+    val name: String? = null,
+    val siteUrl: String? = null,
+    val isAnimationStudio: Boolean = false,
+)
+
+@Serializable
+data class AnikageCharacter(
+    val anilistId: Int? = null,
+    val name: String? = null,
+    val nativeName: String? = null,
+    val role: String? = null,
+    val image: String? = null,
+    val age: String? = null,
+    val description: String? = null,
+)
+
+/** A related / recommended anime card in the info payload. */
+@Serializable
+data class AnikageRelationRef(
+    val slug: String? = null,
+    val anilistId: Int? = null,
+    val title: AnikageTitle = AnikageTitle(),
+    /** Plain URL string in this payload (not an object like AnikageCover). */
+    val coverImage: String? = null,
+    val bannerImage: String? = null,
+    val format: String? = null,
+    val status: String? = null,
+    val episodes: Int? = null,
+    val type: String? = null,
+    val relationType: String? = null,
+)
+
+// ---------------------------------------------------------------------------
+//  Schedule — GET /api/media/anime/schedule
+//
+//  The payload behind the site's /schedule page, served by the Anikage
+//  backend (same data the site renders, no public-AniList dependency).
+//  Shape (live-verified):
+//    [ { "id": "schedule", "weekStart": …, "weekEnd": … },
+//      { "day": "Saturday", "schedule": [ { "episode": 24, "airingAt": …,
+//        "media": { anilistId, slug, title{…}, coverImage{…}, description,
+//                   episodes, … } } ] }, … 7 day elements … ]
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class AnikageScheduleElement(
+    /** "schedule" for the header element; null for day elements. */
+    val id: String? = null,
+    val weekStart: Long? = null,
+    val weekEnd: Long? = null,
+    /** Weekday name ("Saturday"…) for day elements; null for the header. */
+    val day: String? = null,
+    val schedule: List<AnikageScheduleEntry> = emptyList(),
+)
+
+@Serializable
+data class AnikageScheduleEntry(
+    val episode: Int = 0,
+    val airingAt: Long = 0,
+    val media: AnikageScheduleMedia = AnikageScheduleMedia(),
+)
+
+@Serializable
+data class AnikageScheduleMedia(
+    val slug: String? = null,
+    val anilistId: Int? = null,
+    val title: AnikageTitle = AnikageTitle(),
+    val coverImage: AnikageCover = AnikageCover(),
+    val description: String? = null,
+    val episodes: Int? = null,
+    val format: String? = null,
+    val status: String? = null,
+    val season: String? = null,
+    val year: Int? = null,
+    val averageScore: Int? = null,
+    val genres: List<String> = emptyList(),
+    val bannerImage: String? = null,
+    val nextAiringEpisode: AnikageAiringEpisode? = null,
+    val isAdult: Boolean = false,
+    val type: String? = null,
 )

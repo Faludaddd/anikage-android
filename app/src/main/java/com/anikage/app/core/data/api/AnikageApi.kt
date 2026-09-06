@@ -153,6 +153,26 @@ class AnikageApi(
     //  Episodes / servers / sources
     // ---------------------------------------------------------------------
 
+    /**
+     * Anime info — the payload behind the site's /anime/info/{slug} page
+     * (full metadata: description, characters, relations, recommendations,
+     * studios, genres, airing info). The site's own data source; does not
+     * depend on the public AniList GraphQL API.
+     */
+    suspend fun animeInfo(slug: String): AnikageInfoResponse {
+        val url = url(base, "/api/media/anime/$slug")
+        return json.decodeFromString(get(url))
+    }
+
+    /**
+     * Week airing schedule — the payload behind the site's /schedule page
+     * (server-side schedule data; no public-AniList dependency).
+     */
+    suspend fun schedule(): List<AnikageScheduleElement> {
+        val url = url(base, "/api/media/anime/schedule")
+        return json.decodeFromString(get(url))
+    }
+
     suspend fun episodes(slug: String): List<AnikageEpisode> {
         val url = url(base, "/api/media/anime/$slug/episodes")
         return json.decodeFromString(get(url))

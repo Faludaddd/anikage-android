@@ -218,6 +218,12 @@ data class PageInfo(
 @Serializable
 data class AnimeDetails(
     val id: Int,
+    /**
+     * Anikage catalogue slug (the site's info/watch URL key). Present when
+     * the payload came from the Anikage backend; null for plain AniList
+     * responses (unknown keys are ignored / absent keys stay null).
+     */
+    val slug: String? = null,
     val title: AnimeTitle = AnimeTitle(),
     val coverImage: CoverImage = CoverImage(),
     val bannerImage: String? = null,
@@ -253,6 +259,39 @@ data class AnimeDetails(
     fun coverUrl(): String? = coverImage.best()
     fun mainStudio(): Studio? = studios?.mainStudio()
 }
+
+/**
+ * Build a provisional details record from a list item the app already has
+ * in memory (home rail / browse grid / search result / schedule entry).
+ * Used to paint the details page instantly on click and to keep it usable
+ * when the full-info fetch fails — real data, never placeholders.
+ */
+fun Anime.toProvisionalDetails(): AnimeDetails = AnimeDetails(
+    id = id,
+    slug = slug,
+    title = title,
+    coverImage = coverImage,
+    bannerImage = bannerImage,
+    fanartUrl = fanartUrl,
+    clearLogoUrl = clearLogoUrl,
+    trailerId = trailerId,
+    description = description,
+    averageScore = averageScore,
+    meanScore = meanScore,
+    popularity = popularity,
+    favourites = favourites,
+    format = format,
+    status = status,
+    episodes = episodes,
+    duration = duration,
+    season = season,
+    seasonYear = seasonYear,
+    genres = genres,
+    nextAiringEpisode = nextAiringEpisode?.let {
+        AiringEpisode(id = it.id, airingAt = it.airingAt, timeUntilAiring = it.timeUntilAiring, episode = it.episode)
+    },
+    trailer = trailerId?.let { Trailer(id = it, site = "youtube") },
+)
 
 @Serializable
 data class Character(

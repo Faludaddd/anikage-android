@@ -42,6 +42,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.anikage.app.Config
+import com.anikage.app.core.data.AnimePreviewStore
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.SessionLogger
 import com.anikage.app.core.theme.LocalAnikageTheme
@@ -89,8 +90,12 @@ fun AnikageApp() {
             ) {
                 composable(Routes.HOME) {
                     HomeScreen(
-                        onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onAnimeClick = { anime ->
+                            AnimePreviewStore.put(anime)
+                            navController.navigate(Routes.details(anime.id))
+                        },
                         onWatchClick = { anime ->
+                            AnimePreviewStore.put(anime)
                             navController.navigate(Routes.watch(anime.id, 1, anime.slug))
                         },
                         onSeeAllClick = { navController.navigate(Routes.BROWSE) },
@@ -98,12 +103,16 @@ fun AnikageApp() {
                 }
                 composable(Routes.BROWSE) {
                     BrowseScreen(
-                        onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onAnimeClick = { anime ->
+                            AnimePreviewStore.put(anime)
+                            navController.navigate(Routes.details(anime.id))
+                        },
                     )
                 }
                 composable(Routes.SCHEDULE) {
                     ScheduleScreen(
                         onEntryClick = { schedule ->
+                            AnimePreviewStore.put(schedule.media)
                             navController.navigate(
                                 Routes.scheduleDetails(schedule.media.id, schedule.episode, schedule.airingAt)
                             )
@@ -112,7 +121,10 @@ fun AnikageApp() {
                 }
                 composable(Routes.SEARCH) {
                     SearchScreen(
-                        onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onAnimeClick = { anime ->
+                            AnimePreviewStore.put(anime)
+                            navController.navigate(Routes.details(anime.id))
+                        },
                         onBackClick = { navController.popBackStack() },
                     )
                 }
@@ -153,7 +165,10 @@ fun AnikageApp() {
                     DetailsScreen(
                         animeId = id,
                         onBackClick = { navController.popBackStack() },
-                        onAnimeClick = { navController.navigate(Routes.details(it.id)) },
+                        onAnimeClick = { anime ->
+                            AnimePreviewStore.put(anime)
+                            navController.navigate(Routes.details(anime.id))
+                        },
                         onWatchClick = { aId, ep, slug ->
                             navController.navigate(Routes.watch(aId, ep, slug))
                         },
@@ -214,7 +229,11 @@ fun AnikageApp() {
                             navController.navigate(Routes.watch(aId, aEp, slug))
                         },
                         onViewAnime = { aId ->
-                            navController.navigate(Routes.details(aId))
+                            // The schedule entry seeded the preview store; use
+                            // it (with its slug) so the info page opens via the
+                            // Anikage path without needing AniList.
+                            AnimePreviewStore.byId(aId)?.let { navController.navigate(Routes.details(it.id)) }
+                                ?: navController.navigate(Routes.details(aId))
                         },
                     )
                 }

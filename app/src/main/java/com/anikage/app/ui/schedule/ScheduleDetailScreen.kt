@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Public
@@ -147,6 +148,33 @@ fun ScheduleDetailScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(bottom = 48.dp),
                 ) {
+                    // Honest degraded-mode notice (page rendered from the
+                    // schedule entry's own data; enrichment unavailable).
+                    state.degradedNotice?.let { notice ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 10.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0x1AF59E0B))
+                                .border(1.dp, Color(0x33F59E0B), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Error,
+                                contentDescription = null,
+                                tint = Color(0xFFFBBF24),
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = notice,
+                                style = WebTextStyles.xs,
+                                color = Color(0xFFFDE68A),
+                            )
+                        }
+                    }
                     // ── Hero: banner + poster + title ──────────────────────
                     Box(
                         modifier = Modifier

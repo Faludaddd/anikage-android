@@ -40,10 +40,10 @@ object Config {
     const val APP_SHORT_NAME = "Anikage"
 
     /** Version label (shown in About). */
-    const val APP_VERSION = "1.8.1"
+    const val APP_VERSION = "1.9.0"
 
     /** Version code (integer; bump for every release). */
-    const val APP_VERSION_CODE = 18
+    const val APP_VERSION_CODE = 19
 
     /** About / credits line. */
     val ABOUT_TEXT =
@@ -799,6 +799,14 @@ object Config {
         const val READ_TIMEOUT = 30
         /** HTTP write timeout (seconds). */
         const val WRITE_TIMEOUT = 30
+
+        /**
+         * Client-side cap on AniList GraphQL requests per rolling minute.
+         * AniList documents 90/min (30/min while degraded); staying well
+         * under it means the app can never trip the limit, even when a
+         * user browses aggressively.
+         */
+        const val ANILIST_MAX_PER_MINUTE = 25
 
         /**
          * Browser-like User-Agent for outgoing API requests. The Anikage API

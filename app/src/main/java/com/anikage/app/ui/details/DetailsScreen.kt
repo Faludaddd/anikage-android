@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
@@ -312,6 +313,33 @@ fun DetailsScreen(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                // Honest degraded-mode notice: the page is rendering from the
+                // list data the app already had (real data, not placeholders);
+                // full enrichment (cast/relations) is temporarily unavailable.
+                state.degradedNotice?.let { notice ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x1AF59E0B))
+                            .border(1.dp, Color(0x33F59E0B), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Error,
+                            contentDescription = null,
+                            tint = Color(0xFFFBBF24),
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = notice,
+                            style = WebTextStyles.xs,
+                            color = Color(0xFFFDE68A),
+                        )
+                    }
+                }
                 // Next-episode banner (site: emerald-500/10 border pill).
                 details.nextAiringEpisode?.let { next ->
                     val days = next.timeUntilAiring / 86400

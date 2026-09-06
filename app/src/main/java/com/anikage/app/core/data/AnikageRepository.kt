@@ -8,7 +8,11 @@ import com.anikage.app.core.data.api.AnikageApi
 import com.anikage.app.core.data.api.AnikageBrowseResponse
 import com.anikage.app.core.data.api.AnikageComment
 import com.anikage.app.core.data.api.AnikageEpisode
+import com.anikage.app.core.data.api.AnikageInfoAnime
+import com.anikage.app.core.data.api.AnikageInfoResponse
 import com.anikage.app.core.data.api.AnikageMusicAnime
+import com.anikage.app.core.data.api.AnikageRelationRef
+import com.anikage.app.core.data.api.AnikageScheduleElement
 import com.anikage.app.core.data.api.AnikageServer
 import com.anikage.app.core.data.api.AnikageSourcesResponse
 import com.anikage.app.core.data.db.AnikageDatabase
@@ -22,11 +26,24 @@ import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.data.model.AnimeDetails
 import com.anikage.app.core.data.model.AnimeTitle
 import com.anikage.app.core.data.model.CoverImage
+import com.anikage.app.core.data.model.FuzzyDate
 import com.anikage.app.core.data.model.HomeFeed
 import com.anikage.app.core.data.model.PageInfo
+import com.anikage.app.core.data.model.Character
+import com.anikage.app.core.data.model.CharacterConnection
+import com.anikage.app.core.data.model.CharacterImage
+import com.anikage.app.core.data.model.CharacterName
+import com.anikage.app.core.data.model.RecommendationConnection
+import com.anikage.app.core.data.model.RecommendationNode
+import com.anikage.app.core.data.model.RelationConnection
+import com.anikage.app.core.data.model.Studio
+import com.anikage.app.core.data.model.StudioConnection
+import com.anikage.app.core.data.model.Trailer
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -197,6 +214,9 @@ class AnikageRepository private constructor(
 
     private suspend fun cacheAll(items: List<Anime>) {
         if (items.isEmpty()) return
+        // Every list payload carries anilistId + slug — remember the pairing
+        // so later detail loads can hit the Anikage info endpoint directly.
+        items.forEach { rememberSlug(it.id, it.slug) }
         animeDao.upsertAll(items.map { it.toEntity() })
     }
 
@@ -460,6 +480,30 @@ class AnikageRepository private constructor(
         if (query.isBlank()) {
             return@withContext Result.success(emptyList<Anime>() to PageInfo())
         }
+        // PRIMARY — the site's own search (browse?q=), the exact query the
+        // website runs; served by the Anikage backend, so search keeps
+        // working even while the public AniList API is unavailable.
+        val ak = anikage
+        if (ak != null) {
+            try {
+                val response = ak.browse(query = query, page = page, limit = perPage)
+                val items = response.data.map { it.toAnime() }
+                if (items.isNotEmpty()) {
+                    cacheAll(items)
+                    return@withContext Result.success(
+                        items to PageInfo(
+                            total = response.total,
+                            currentPage = page,
+                            hasNextPage = response.hasNext,
+                            perPage = perPage,
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Anikage search failed for '$query' — falling back to AniList", e)
+            }
+        }
+        // FALLBACK — AniList GraphQL SEARCH.
         try {
             val (items, info) = api.search(query, page, perPage)
             cacheAll(items)
@@ -490,6 +534,29 @@ class AnikageRepository private constructor(
 
     private suspend fun fetchScheduleWeek(startAt: Long): Result<List<AiringSchedule>> =
         withContext(Dispatchers.IO) {
+            // PRIMARY — the site's own schedule payload (GET /api/media/anime/
+            // schedule), served by the Anikage backend: the same data the
+            // website renders, with no dependency on the public AniList API.
+            val ak = anikage
+            if (ak != null) {
+                try {
+                    val elements: List<AnikageScheduleElement> = ak.schedule()
+                    val entries = elements.flatMap { el ->
+                        el.schedule.map { entry -> entry.toAiringSchedule() }
+                    }
+                    if (entries.isNotEmpty()) {
+                        entries.forEach { rememberSlug(it.media.id, it.media.slug) }
+                        AppLogger.i(
+                            LogCategory.DATA,
+                            "Schedule loaded from Anikage (${entries.size} entries across 7 days)",
+                        )
+                        return@withContext Result.success(entries)
+                    }
+                } catch (e: Exception) {
+                    AppLogger.w(LogCategory.DATA, "Anikage schedule failed — falling back to AniList", e)
+                }
+            }
+            // FALLBACK — AniList GraphQL airingSchedules.
             try {
                 val endAt = startAt + 7 * 24 * 60 * 60
                 val (items, _) = api.schedule(startAt, endAt, page = 1, perPage = 50)
@@ -502,12 +569,73 @@ class AnikageRepository private constructor(
 
     // -------------------------------------------------------------------------
     //  Anime details (TTL 5min, single-flight — shared by Details & Watch)
+    //
+    //  PRIMARY:   Anikage info (GET /api/media/anime/{slug}) — the payload
+    //             the site's own /anime/info page renders from.
+    //  SECONDARY: AniList GraphQL (only reachable when their public API is
+    //             up — it was globally disabled with HTTP 403 when the
+    //             Anikage path was introduced).
+    //  LAST:      Room detail cache (last known good).
     // -------------------------------------------------------------------------
+
+    /** anilistId -> catalogue slug, remembered from every payload carrying both. */
+    private val slugMemory = mutableMapOf<Int, String>()
+
+    private fun rememberSlug(anilistId: Int?, slug: String?) {
+        if (anilistId == null || anilistId <= 0 || slug.isNullOrBlank()) return
+        slugMemory[anilistId] = slug
+    }
+
+    /** Best known catalogue slug for an AniList id (preview store -> memory -> cached details). */
+    private suspend fun slugFor(anilistId: Int): String? {
+        AnimePreviewStore.slugFor(anilistId)?.let { return it }
+        slugMemory[anilistId]?.let { return it }
+        detailDao.get(anilistId)?.let { cached ->
+            try {
+                json.decodeFromString(AnimeDetails.serializer(), cached.json).slug?.let { return it }
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
 
     suspend fun animeDetails(id: Int, forceRefresh: Boolean = false): Result<AnimeDetails> =
         singleFlight("anikage:details:$id", TTL_LONG, forceRefresh) { fetchAnimeDetails(id) }
 
     private suspend fun fetchAnimeDetails(id: Int): Result<AnimeDetails> = withContext(Dispatchers.IO) {
+        // Resolve the catalogue slug from any source we already have; when
+        // only a title is known (list preview), resolve via the catalogue
+        // search — never via AniList.
+        var known: String? = slugFor(id)
+        if (known == null) {
+            AnimePreviewStore.byId(id)?.let { preview ->
+                known = resolveSlug(id, preview.title.english, preview.title.romaji)
+            }
+        }
+        val slug = known
+        val ak = anikage
+        if (ak != null && slug != null) {
+            try {
+                val info: AnikageInfoResponse = ak.animeInfo(slug)
+                if (!info.banned && info.anime != null) {
+                    val details = info.anime.toAnimeDetails().let { mapped ->
+                        if (mapped.id > 0) mapped else mapped.copy(id = id)
+                    }
+                    rememberSlug(id, details.slug)
+                    detailDao.upsert(
+                        DetailCacheEntity(
+                            animeId = id,
+                            json = json.encodeToString(AnimeDetails.serializer(), details),
+                        )
+                    )
+                    AppLogger.i(LogCategory.DATA, "Details loaded from Anikage info (id=$id, slug=$slug)")
+                    return@withContext Result.success(details)
+                }
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Anikage info failed for slug=$slug — trying AniList", e)
+            }
+        }
+        // SECONDARY — AniList GraphQL.
         try {
             val details = api.animeDetails(id)
                 ?: return@withContext Result.failure(IllegalArgumentException("Anime $id not found"))
@@ -520,7 +648,7 @@ class AnikageRepository private constructor(
             Result.success(details)
         } catch (e: Exception) {
             Log.w(tag, "animeDetails failed: ${e.message}")
-            // Fallback to cache
+            // LAST — Room cache (last known good).
             val cached = detailDao.get(id)
             if (cached != null) {
                 try {
@@ -813,6 +941,149 @@ private fun com.anikage.app.core.data.api.AnikageMedia.toAnime() = Anime(
         )
     },
 )
+
+/**
+ * Anikage info payload (the site's /anime/info data) -> the shared
+ * AnimeDetails model. Everything the AniList path provided is available
+ * here: description, characters, relations, recommendations, studios,
+ * genres, airing info, artwork.
+ */
+private fun AnikageInfoAnime.toAnimeDetails(): AnimeDetails = AnimeDetails(
+    id = anilistId ?: 0,
+    slug = slug,
+    title = AnimeTitle(romaji = title.romaji, english = title.english, native = title.native),
+    coverImage = CoverImage(
+        large = coverImage.large,
+        extraLarge = coverImage.extraLarge,
+        medium = coverImage.medium,
+        color = coverColor ?: coverImage.color,
+    ),
+    bannerImage = bannerImage,
+    fanartUrl = fanart,
+    clearLogoUrl = clearLogo,
+    trailerId = trailerId,
+    trailer = trailerId?.let { Trailer(id = it, site = "youtube") },
+    description = description,
+    averageScore = averageScore,
+    meanScore = meanScore,
+    popularity = popularity,
+    favourites = favourites,
+    format = format,
+    status = status,
+    episodes = totalEpisodes,
+    duration = duration,
+    season = season,
+    seasonYear = year,
+    startDate = parseWebDate(startDate),
+    endDate = parseWebDate(endDate),
+    genres = genres,
+    studios = StudioConnection(
+        studios.map {
+            Studio(id = it.anilistId ?: 0, name = it.name ?: "", isAnimationStudio = it.isAnimationStudio)
+        }
+    ),
+    nextAiringEpisode = nextAiringEpisode?.let {
+        AiringEpisode(
+            id = 0,
+            airingAt = it.airingAt ?: 0L,
+            timeUntilAiring = it.timeUntilAiring ?: 0L,
+            episode = it.episode ?: 0,
+        )
+    },
+    // Site payload ships the full cast; the details screen shows 12.
+    characters = CharacterConnection(
+        characters.take(12).map {
+            Character(
+                id = it.anilistId ?: 0,
+                name = CharacterName(full = it.name, native = it.nativeName),
+                image = it.image?.let { url -> CharacterImage(large = url, medium = url) },
+            )
+        }
+    ),
+    relations = RelationConnection(
+        relations.filter { (it.anilistId ?: 0) > 0 }.map { it.toAnime() }
+    ),
+    recommendations = RecommendationConnection(
+        recommendations.filter { (it.anilistId ?: 0) > 0 }.map {
+            RecommendationNode(mediaRecommendation = it.toAnime())
+        }
+    ),
+)
+
+/** A related/recommended card from the info payload -> shared Anime model. */
+private fun AnikageRelationRef.toAnime(): Anime = Anime(
+    id = anilistId ?: 0,
+    slug = slug,
+    title = AnimeTitle(romaji = title.romaji, english = title.english, native = title.native),
+    coverImage = CoverImage(large = coverImage),
+    bannerImage = bannerImage,
+    format = format,
+    status = status,
+    episodes = episodes,
+)
+
+/** A schedule entry (Anikage schedule payload) -> shared AiringSchedule model. */
+private fun com.anikage.app.core.data.api.AnikageScheduleEntry.toAiringSchedule(): AiringSchedule {
+    val media = media
+    val anime = Anime(
+        id = media.anilistId ?: 0,
+        slug = media.slug,
+        title = AnimeTitle(
+            romaji = media.title.romaji,
+            english = media.title.english,
+            native = media.title.native,
+        ),
+        coverImage = CoverImage(
+            large = media.coverImage.large,
+            extraLarge = media.coverImage.extraLarge,
+            medium = media.coverImage.medium,
+            color = media.coverImage.color,
+        ),
+        bannerImage = media.bannerImage,
+        description = media.description,
+        averageScore = media.averageScore,
+        format = media.format,
+        status = media.status,
+        season = media.season,
+        seasonYear = media.year,
+        episodes = media.episodes,
+        genres = media.genres,
+        nextAiringEpisode = media.nextAiringEpisode?.let {
+            AiringEpisode(
+                id = 0,
+                airingAt = it.airingAt ?: 0L,
+                timeUntilAiring = it.timeUntilAiring ?: 0L,
+                episode = it.episode ?: 0,
+            )
+        },
+    )
+    return AiringSchedule(
+        // The Anikage payload has no per-entry id; synthesize a unique,
+        // stable one from (anilistId, episode).
+        id = (media.anilistId ?: 0) * 1000 + episode,
+        episode = episode,
+        airingAt = airingAt,
+        timeUntilAiring = (airingAt - System.currentTimeMillis() / 1000).coerceAtLeast(0),
+        media = anime,
+    )
+}
+
+/** Parse the site's "Sep 29, 2023" date strings into a FuzzyDate. */
+private fun parseWebDate(value: String?): FuzzyDate? {
+    if (value.isNullOrBlank()) return null
+    return try {
+        val date = SimpleDateFormat("MMM d, yyyy", Locale.US).parse(value) ?: return null
+        val cal = Calendar.getInstance()
+        cal.time = date
+        FuzzyDate(
+            year = cal.get(Calendar.YEAR),
+            month = cal.get(Calendar.MONTH) + 1,
+            day = cal.get(Calendar.DAY_OF_MONTH),
+        )
+    } catch (_: Exception) {
+        null
+    }
+}
 
 /**
  * Compute current season name based on month (AniList seasons).
