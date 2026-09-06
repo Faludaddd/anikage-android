@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.anikage.app.core.data.AnikageRepository
@@ -45,6 +46,7 @@ fun MusicScreen(onAnimeClick: (Anime) -> Unit) {
     val browseViewModel: BrowseViewModel = viewModel(factory = BrowseViewModel.factory(repo))
     val state by browseViewModel.state.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
+    val isTablet = LocalConfiguration.current.screenWidthDp >= 600
 
     LaunchedEffect(query) {
         if (query.length >= 2) {
@@ -90,7 +92,7 @@ fun MusicScreen(onAnimeClick: (Anime) -> Unit) {
                 modifier = Modifier.padding(top = 32.dp),
             )
             else -> LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
+                columns = GridCells.Adaptive(if (isTablet) 135.dp else 105.dp),
                 contentPadding = PaddingValues(top = 24.dp, bottom = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),

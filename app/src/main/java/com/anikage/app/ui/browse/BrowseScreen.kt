@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.anikage.app.Config
@@ -82,6 +83,7 @@ fun BrowseScreen(onAnimeClick: (Anime) -> Unit) {
     val viewModel: BrowseViewModel = viewModel(factory = BrowseViewModel.factory(repo))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val gridState = rememberLazyGridState()
+    val isTablet = LocalConfiguration.current.screenWidthDp >= 600
     var showFilters by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier
@@ -158,7 +160,7 @@ fun BrowseScreen(onAnimeClick: (Anime) -> Unit) {
         }
 
         LazyVerticalGrid(
-            columns = GridCells.Fixed(Config.Images.GRID_COLUMNS_PHONE),
+            columns = GridCells.Adaptive(if (isTablet) 135.dp else 105.dp),
             state = gridState,
             contentPadding = PaddingValues(
                 horizontal = Config.Spacing.screenHorizontal,

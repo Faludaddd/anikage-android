@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -60,6 +64,7 @@ fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
     val days = state.byDay.keys.toList()
     var selectedDay by remember { mutableStateOf<String?>(null) }
     val activeDay = selectedDay?.takeIf { it in state.byDay } ?: days.firstOrNull()
+    val isTablet = LocalConfiguration.current.screenWidthDp >= 600
 
     Column(Modifier.fillMaxSize().background(Color(0xFF0A0A0A))) {
         when {
@@ -94,7 +99,17 @@ fun ScheduleScreen(onAnimeClick: (Anime) -> Unit) {
                     }
                 }
                 val entries = state.byDay[activeDay].orEmpty()
-                LazyColumn(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (isTablet) {
+                    LazyVerticalGrid(columns = GridCells.Fixed(2), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("${activeDay ?: "Schedule"} · Today", color = Color.White, fontWeight = FontWeight.SemiBold)
+                                Text("${entries.size} episodes", color = Color.White.copy(alpha = .55f), style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        gridItems(entries, key = { it.id }) { schedule -> ScheduleRow(schedule) { onAnimeClick(schedule.media) } }
+                    }
+                } else LazyColumn(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("${activeDay ?: "Schedule"} · Today", color = Color.White, fontWeight = FontWeight.SemiBold)
