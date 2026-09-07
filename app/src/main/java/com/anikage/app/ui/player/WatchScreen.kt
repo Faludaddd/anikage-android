@@ -30,16 +30,20 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Login
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -51,6 +55,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,7 +75,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.foundation.Image
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -78,9 +82,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.anikage.app.Config
+import com.anikage.app.core.auth.AuthManager
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.api.AnikageComment
 import com.anikage.app.core.download.EpisodeDownloadEngine
+import com.anikage.app.core.media.PlayerFullscreen
 import com.anikage.app.core.settings.SettingsState
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
@@ -89,16 +95,19 @@ import com.anikage.app.ui.components.SkeletonBlock
 import java.time.Duration
 import java.time.Instant
 import android.content.pm.ActivityInfo
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Watch screen — 1:1 layout of the site's watch page:
- *  stage (player / E-server embed) → meta (EP chip, views, action buttons)
- *  → server panel (SUB/DUB + servers + E-servers) → tabs (Episodes | Info)
- *  → episodes / info → comments. Wide layout mirrors the site's 2-col grid.
+ *  stage (player) → meta (EP chip, views, action buttons) → server panel
+ *  (SUB/DUB + servers with health) → tabs (Episodes | Info) → episodes
+ *  (season selector + selection downloads) → comments (composer + posting).
  *
- *  v2.1.0: all player functions live IN the player (quick menus); Report
- *  removed; in-app downloads with live progress; episode rows show
- *  watched state + progress + filler; local anime list; avatars fixed.
+ *  v2.2.0: fullscreen drives the GLOBAL [PlayerFullscreen] state so the
+ *  app's top tab bar is never visible over the video (directive #2);
+ *  E-servers removed (directive #7); seasons (directive #6); batch episode
+ *  downloads (directive #5); REAL comment posting with login (directive #8).
  */
 @Composable
 fun WatchScreen(
@@ -127,11 +136,18 @@ fun WatchScreen(
     var isFullscreen by remember { mutableStateOf(false) }
     var showDownloadDialog by remember { mutableStateOf(false) }
     var showListSheet by remember { mutableStateOf(false) }
+    var showLoginSheet by remember { mutableStateOf(false) }
+
+    // Selection-download mode (directive #5): pick episodes straight from
+    // the episode list, then download them in one action.
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedEpisodes by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
     val activity = context as? Activity
 
     // Fullscreen stage — same player instance (VM-owned), orientation +
     // immersive bars below; position/episode/controls state all preserved.
+    // PlayerFullscreen tells the app shell to hide the top bar (directive #2).
     val fullscreenStage: @Composable () -> Unit = {
         PlayerStage(
             state = state,
@@ -144,6 +160,12 @@ fun WatchScreen(
     // System back exits fullscreen FIRST (restores the previous UI state);
     // a second back leaves the screen.
     BackHandler(enabled = isFullscreen) { isFullscreen = false }
+
+    // Keep the global fullscreen state in sync (hides the app top bar).
+    DisposableEffect(isFullscreen) {
+        if (isFullscreen) PlayerFullscreen.enter() else PlayerFullscreen.exit()
+        onDispose { if (isFullscreen) PlayerFullscreen.exit() }
+    }
 
     // ── fullscreen: orientation per setting + immersive system bars ────
     DisposableEffect(isFullscreen) {
@@ -173,6 +195,7 @@ fun WatchScreen(
         val originalOrientation = activity?.requestedOrientation
         onDispose {
             viewModel.saveProgressNow()
+            PlayerFullscreen.exit()
             if (originalOrientation != null) {
                 activity?.requestedOrientation = originalOrientation
             }
@@ -193,7 +216,7 @@ fun WatchScreen(
     // ── hardware-keyboard shortcuts (site: anikage-watch-hotkeys) ────────
     val seekSec = SettingsState.seekAmountSec.coerceIn(5, 60)
     val keyHandler = Modifier.onPreviewKeyEvent { event ->
-        if (event.type != KeyEventType.KeyDown || state.streamUrl == null || state.embedActive != null) {
+        if (event.type != KeyEventType.KeyDown || state.streamUrl == null) {
             return@onPreviewKeyEvent false
         }
         val speedStep = {
@@ -262,6 +285,12 @@ fun WatchScreen(
                         onDownload = { showDownloadDialog = true },
                         onList = { showListSheet = true },
                         onOpenDownloads = onOpenDownloads,
+                        selectionMode = selectionMode,
+                        selectedEpisodes = selectedEpisodes,
+                        onSelectionChange = { mode, eps ->
+                            selectionMode = mode
+                            selectedEpisodes = eps
+                        },
                     )
                 } else {
                     WatchMobileLayout(
@@ -275,12 +304,18 @@ fun WatchScreen(
                         onDownload = { showDownloadDialog = true },
                         onList = { showListSheet = true },
                         onOpenDownloads = onOpenDownloads,
+                        selectionMode = selectionMode,
+                        selectedEpisodes = selectedEpisodes,
+                        onSelectionChange = { mode, eps ->
+                            selectionMode = mode
+                            selectedEpisodes = eps
+                        },
                     )
                 }
             }
         }
 
-        // ── dialogs (in-app download / local list sheet) ─────────────
+        // ── dialogs (download / list / login) ────────────────────────────
         if (showDownloadDialog) {
             DownloadDialog(
                 animeId = animeId,
@@ -297,6 +332,12 @@ fun WatchScreen(
             ListSheet(
                 viewModel = viewModel,
                 onDismiss = { showListSheet = false },
+            )
+        }
+        if (showLoginSheet) {
+            LoginSheet(
+                onDismiss = { showLoginSheet = false },
+                onSignedIn = { viewModel.refreshComments() },
             )
         }
     }
@@ -318,12 +359,17 @@ private fun WatchMobileLayout(
     onDownload: () -> Unit,
     onList: () -> Unit,
     onOpenDownloads: () -> Unit,
+    selectionMode: Boolean,
+    selectedEpisodes: Set<Int>,
+    onSelectionChange: (Boolean, Set<Int>) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     // ONE sort per episode-list change (was re-sorted on every position
     // tick — O(n log n) 4x/second for 1000+ episode lists).
-    val episodes = remember(state.episodes, SettingsState.episodeSortOrder) {
-        if (SettingsState.episodeSortOrder == "desc") state.episodes.sortedByDescending { it.number }
-        else state.episodes.sortedBy { it.number }
+    val episodes = remember(state.episodes, state.selectedSeason, SettingsState.episodeSortOrder) {
+        val base = state.seasonEpisodes
+        if (SettingsState.episodeSortOrder == "desc") base.sortedByDescending { it.number }
+        else base.sortedBy { it.number }
     }
     val context = LocalContext.current
     var downloadedEpNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
@@ -371,13 +417,47 @@ private fun WatchMobileLayout(
         item(key = "tabs") { MobileTabs(state = state, tab = tab, onTabChange = onTabChange, onOpenInfo = onOpenInfo) }
 
         if (tab == 0) {
+            // ── Season selector + selection toolbar (directive #6 + #5) ──
+            item(key = "season-bar") {
+                SeasonSelector(
+                    state = state,
+                    viewModel = viewModel,
+                    selectionMode = selectionMode,
+                    selectedCount = selectedEpisodes.size,
+                    onSelectAll = {
+                        onSelectionChange(true, episodes.map { it.number }.toSet())
+                    },
+                    onExitSelection = { onSelectionChange(false, emptySet()) },
+                    onStartDownload = {
+                        viewModel.startEpisodeDownloads(selectedEpisodes.toList(), SettingsState.downloadQualityHeight)
+                        onSelectionChange(false, emptySet())
+                    },
+                )
+            }
             items(episodes, key = { it.number }) { ep ->
                 EpisodeRow(
                     ep = ep,
                     active = ep.number == state.episode,
                     progress = state.episodeProgress[ep.number],
                     downloaded = downloadedEpNumbers.contains(ep.number),
-                    onClick = { viewModel.switchEpisode(ep.number) },
+                    selectionMode = selectionMode,
+                    selected = selectedEpisodes.contains(ep.number),
+                    onToggleSelect = {
+                        val next = if (selectedEpisodes.contains(ep.number)) {
+                            selectedEpisodes - ep.number
+                        } else selectedEpisodes + ep.number
+                        onSelectionChange(true, next)
+                    },
+                    onClick = {
+                        if (selectionMode) {
+                            val next = if (selectedEpisodes.contains(ep.number)) {
+                                selectedEpisodes - ep.number
+                            } else selectedEpisodes + ep.number
+                            onSelectionChange(true, next)
+                        } else {
+                            viewModel.switchEpisode(ep.number)
+                        }
+                    },
                 )
             }
         } else {
@@ -388,9 +468,11 @@ private fun WatchMobileLayout(
 
         item(key = "comments") {
             CommentsSection(
-                state = state.comments,
+                state = state,
+                viewModel = viewModel,
                 episode = state.episode,
                 onRefresh = viewModel::refreshComments,
+                onNeedLogin = { /* login sheet handled by composer */ },
             )
         }
         item(key = "bottom-space") { Spacer(Modifier.height(96.dp)) }
@@ -411,10 +493,14 @@ private fun WatchWideLayout(
     onDownload: () -> Unit,
     onList: () -> Unit,
     onOpenDownloads: () -> Unit,
+    selectionMode: Boolean,
+    selectedEpisodes: Set<Int>,
+    onSelectionChange: (Boolean, Set<Int>) -> Unit,
 ) {
-    val episodes = remember(state.episodes, SettingsState.episodeSortOrder) {
-        if (SettingsState.episodeSortOrder == "desc") state.episodes.sortedByDescending { it.number }
-        else state.episodes.sortedBy { it.number }
+    val episodes = remember(state.episodes, state.selectedSeason, SettingsState.episodeSortOrder) {
+        val base = state.seasonEpisodes
+        if (SettingsState.episodeSortOrder == "desc") base.sortedByDescending { it.number }
+        else base.sortedBy { it.number }
     }
     val context = LocalContext.current
     var downloadedEpNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
@@ -468,10 +554,12 @@ private fun WatchWideLayout(
                 modifier = Modifier.padding(bottom = 8.dp),
             )
             CommentsSection(
-                state = state.comments,
+                state = state,
+                viewModel = viewModel,
                 episode = state.episode,
                 onRefresh = viewModel::refreshComments,
                 horizontalPadding = PaddingValues(0.dp),
+                onNeedLogin = {},
             )
             Spacer(Modifier.height(48.dp))
         }
@@ -501,6 +589,19 @@ private fun WatchWideLayout(
                     color = LocalAnikageTheme.current.fgMuted,
                 )
             }
+            // Season selector + batch download bar (directives #6, #5).
+            SeasonSelector(
+                state = state,
+                viewModel = viewModel,
+                selectionMode = selectionMode,
+                selectedCount = selectedEpisodes.size,
+                onSelectAll = { onSelectionChange(true, episodes.map { it.number }.toSet()) },
+                onExitSelection = { onSelectionChange(false, emptySet()) },
+                onStartDownload = {
+                    viewModel.startEpisodeDownloads(selectedEpisodes.toList(), SettingsState.downloadQualityHeight)
+                    onSelectionChange(false, emptySet())
+                },
+            )
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
@@ -512,7 +613,24 @@ private fun WatchWideLayout(
                         active = ep.number == state.episode,
                         progress = state.episodeProgress[ep.number],
                         downloaded = downloadedEpNumbers.contains(ep.number),
-                        onClick = { viewModel.switchEpisode(ep.number) },
+                        selectionMode = selectionMode,
+                        selected = selectedEpisodes.contains(ep.number),
+                        onToggleSelect = {
+                            val next = if (selectedEpisodes.contains(ep.number)) {
+                                selectedEpisodes - ep.number
+                            } else selectedEpisodes + ep.number
+                            onSelectionChange(true, next)
+                        },
+                        onClick = {
+                            if (selectionMode) {
+                                val next = if (selectedEpisodes.contains(ep.number)) {
+                                    selectedEpisodes - ep.number
+                                } else selectedEpisodes + ep.number
+                                onSelectionChange(true, next)
+                            } else {
+                                viewModel.switchEpisode(ep.number)
+                            }
+                        },
                         horizontalPadding = PaddingValues(0.dp),
                     )
                 }
@@ -542,10 +660,6 @@ private fun PlayerStage(
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
 ) {
-    val ambientUrl = state.episodes.firstOrNull { it.number == state.episode }?.thumbnail
-        ?: state.details?.bannerImage
-        ?: state.details?.coverImage?.best()
-
     Box(
         modifier = if (isFullscreen) {
             Modifier.fillMaxSize()
@@ -560,106 +674,172 @@ private fun PlayerStage(
                 .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(16.dp))
         },
     ) {
-        if (state.embedActive != null) {
-            // ── E-server mode: the site's iframe player in a WebView ──────
-            EmbedPlayer(
-                url = state.embedUrl,
-                loading = state.embedLoading,
-                error = state.embedError,
-                onRetry = { viewModel.reloadStream(refresh = true) },
-            )
-        } else {
-            AnikagePlayer(
-                state = state,
-                viewModel = viewModel,
-                isFullscreen = isFullscreen,
-                onToggleFullscreen = onToggleFullscreen,
-                onBack = onToggleFullscreen,
-                modifier = Modifier.fillMaxSize(),
-            )
-            // Stream resolution in progress — thin top progress shimmer.
-            if (state.streamLoading && state.streamUrl == null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0x66000000)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(
-                        color = Color.White,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(32.dp),
-                    )
-                }
+        AnikagePlayer(
+            state = state,
+            viewModel = viewModel,
+            isFullscreen = isFullscreen,
+            onToggleFullscreen = onToggleFullscreen,
+            onBack = onToggleFullscreen,
+            modifier = Modifier.fillMaxSize(),
+        )
+        // Stream resolution in progress — thin top progress shimmer.
+        if (state.streamLoading && state.streamUrl == null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x66000000)),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(32.dp),
+                )
             }
         }
     }
 }
 
-/** E-server embed: megaplay.buzz player in a WebView (site iframe 1:1). */
+// ---------------------------------------------------------------------------
+//  Season selector + batch-download toolbar (directives #6 + #5)
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun EmbedPlayer(
-    url: String?,
-    loading: Boolean,
-    error: String?,
-    onRetry: () -> Unit,
+private fun SeasonSelector(
+    state: WatchUiState,
+    viewModel: WatchViewModel,
+    selectionMode: Boolean,
+    selectedCount: Int,
+    onSelectAll: () -> Unit,
+    onExitSelection: () -> Unit,
+    onStartDownload: () -> Unit,
+    horizontalPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
 ) {
-    val context = LocalContext.current
-    Box(
+    val theme = LocalAnikageTheme.current
+    Column(
         modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black),
+            .fillMaxWidth()
+            .padding(horizontalPadding)
+            .padding(bottom = 8.dp),
     ) {
-        if (url != null) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    android.webkit.WebView(ctx).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.mediaPlaybackRequiresUserGesture = false
-                        settings.loadsImagesAutomatically = true
-                        settings.mixedContentMode =
-                            android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                        webViewClient = android.webkit.WebViewClient()
-                        loadUrl(url)
-                    }
-                },
-            )
-        } else if (loading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
+        // ── Season chips (directive #6): quick switching, same page ──────
+        if (state.seasons.size > 1) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 8.dp),
             ) {
-                CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(32.dp))
+                items(state.seasons, key = { it.key }) { season ->
+                    val selected = season.key == state.selectedSeason
+                    Text(
+                        text = season.label,
+                        style = WebTextStyles.xs,
+                        color = if (selected) theme.actionFg else Color(0xFFD4D4D8),
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (selected) theme.action else Color(0x0DFFFFFF))
+                            .border(
+                                1.dp,
+                                if (selected) Color.Transparent else Color(0x14FFFFFF),
+                                RoundedCornerShape(50),
+                            )
+                            .clickable { viewModel.selectSeason(season.key) }
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                    )
+                }
             }
-        } else {
-            Column(
+        }
+        // ── Selection toolbar (directive #5): pick episodes → download ──
+        if (selectionMode) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x14FFFFFF))
+                    .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
             ) {
-                Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(26.dp))
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = error ?: "This embed server has no source for the episode.",
-                    style = WebTextStyles.sm,
-                    color = Color(0xFFD4D4D8),
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = theme.action,
+                    modifier = Modifier.size(16.dp),
                 )
-                Spacer(Modifier.height(12.dp))
                 Text(
-                    text = "Retry",
+                    text = "$selectedCount selected",
+                    style = WebTextStyles.sm,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "All",
                     style = WebTextStyles.xs,
                     color = Color.White,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White)
-                        .clickable(onClick = onRetry)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x1FFFFFFF))
+                        .clickable(onClick = onSelectAll)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
+                Text(
+                    text = "Download",
+                    style = WebTextStyles.xs,
+                    color = theme.actionFg,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(theme.action)
+                        .clickable(onClick = onStartDownload, enabled = selectedCount > 0)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Cancel selection",
+                    tint = Color(0xFFD4D4D8),
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onExitSelection)
+                        .padding(4.dp),
+                )
+            }
+        } else {
+            // Enter selection mode.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { /* toggled by the button below */ }
+                    .padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x0DFFFFFF))
+                        .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(8.dp))
+                        .clickable(onClick = onSelectAll)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    Icon(
+                        Icons.Default.SelectAll,
+                        contentDescription = null,
+                        tint = theme.fgMuted,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        text = "Select episodes",
+                        style = WebTextStyles.xs,
+                        color = theme.fgMuted,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
     }
@@ -691,6 +871,13 @@ private fun WatchInfoSection(state: WatchUiState, onOpenInfo: (Int) -> Unit) {
                         .clip(RoundedCornerShape(50))
                         .background(Color(0x14FFFFFF))
                         .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+            if (details.studios?.mainStudio() != null) {
+                Text(
+                    text = "Studio · ${details.studios.mainStudio()!!.name}",
+                    style = WebTextStyles.xs,
+                    color = Color(0xFFD4D4D8),
                 )
             }
         }
@@ -841,7 +1028,7 @@ private fun MetaRow(
                 }
             }
         }
-        // Site's action row: Add to List / Download (Report removed).
+        // Site's action row: Add to List / Download / Subscribe.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -857,6 +1044,12 @@ private fun MetaRow(
                 label = "Download",
                 onClick = onDownload,
             )
+            ActionButton(
+                icon = if (state.subscribed) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                label = if (state.subscribed) "Subscribed" else "Subscribe",
+                accent = state.subscribed,
+                onClick = viewModel::toggleSubscription,
+            )
         }
     }
 }
@@ -867,6 +1060,7 @@ private fun ActionButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit,
+    accent: Boolean = false,
 ) {
     val theme = LocalAnikageTheme.current
     Row(
@@ -874,23 +1068,31 @@ private fun ActionButton(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0x08FFFFFF))
-            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+            .background(if (accent) theme.action.copy(alpha = 0.15f) else Color(0x08FFFFFF))
+            .border(
+                1.dp,
+                if (accent) theme.action.copy(alpha = 0.45f) else Color(0x0FFFFFFF),
+                RoundedCornerShape(12.dp),
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = theme.fg, modifier = Modifier.size(14.dp))
+        Icon(
+            icon, contentDescription = null,
+            tint = if (accent) theme.action else theme.fg,
+            modifier = Modifier.size(14.dp),
+        )
         Text(
             text = label,
             style = WebTextStyles.sm,
-            color = theme.fg,
+            color = if (accent) theme.action else theme.fg,
             fontWeight = FontWeight.Medium,
         )
     }
 }
 
 // ---------------------------------------------------------------------------
-//  Server panel — chips gated by subType support + E-servers (site 1:1)
+//  Server panel — SUB/DUB + servers with observed health (directive #7)
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -917,12 +1119,19 @@ private fun ServerPanel(
                 .fillMaxWidth()
                 .padding(bottom = 12.dp),
         ) {
-            Text(
-                text = "Servers (${state.availableServers.size.coerceAtLeast(1)})",
-                style = WebTextStyles.base,
-                color = theme.fg,
-                fontWeight = FontWeight.SemiBold,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "Servers",
+                    style = WebTextStyles.base,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "${state.availableServers.size.coerceAtLeast(1)} available",
+                    style = WebTextStyles.xs2,
+                    color = theme.fgMuted,
+                )
+            }
             // SUB / DUB segmented (site: btn-xs, active bg-action).
             Row(
                 modifier = Modifier
@@ -973,7 +1182,8 @@ private fun ServerPanel(
                 )
             }
         }
-        // Server chips (site: flex-wrap gap-2 rounded-lg bg-white/5).
+        // Server chips (site: flex-wrap gap-2 rounded-lg bg-white/5) with
+        // live health dots — green streamed fine, red failed this session.
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val serverList = if (state.servers.isEmpty()) {
                 listOf(StreamServer(state.streamServer, state.streamServer, true, true, true))
@@ -982,56 +1192,33 @@ private fun ServerPanel(
             }
             items(serverList, key = { it.id }) { server ->
                 val langSupported = if (state.streamLang == "dub") server.supportsDub else server.supportsSub
-                val active = (server.name.equals(state.streamServer, ignoreCase = true) ||
-                    server.id.equals(state.streamServer, ignoreCase = true)) && state.embedActive == null
+                val active = server.name.equals(state.streamServer, ignoreCase = true) ||
+                    server.id.equals(state.streamServer, ignoreCase = true)
                 val enabled = langSupported
                 ServerChip(
                     label = server.name,
                     active = active,
                     enabled = enabled,
+                    healthy = server.healthy,
                     onClick = { viewModel.setStreamServer(server.name) },
                 )
-            }
-        }
-        // E-Server chips (site: E-Koto / E-Neko … — iframe embeds).
-        if (state.embedServers.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "E-Server",
-                style = WebTextStyles.xs2,
-                color = theme.fgMuted,
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(state.embedServers, key = { "embed-${it.key}" }) { embed ->
-                    val active = state.embedActive?.key == embed.key
-                    ServerChip(
-                        label = embed.label,
-                        active = active,
-                        enabled = true,
-                        onClick = {
-                            if (active) viewModel.setEmbedServer(null)
-                            else viewModel.setEmbedServer(embed)
-                        },
-                    )
-                }
             }
         }
     }
 }
 
 @Composable
-private fun ServerChip(label: String, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun ServerChip(
+    label: String,
+    active: Boolean,
+    enabled: Boolean,
+    healthy: Boolean?,
+    onClick: () -> Unit,
+) {
     val theme = LocalAnikageTheme.current
-    Text(
-        text = label,
-        style = WebTextStyles.xs,
-        color = when {
-            active -> theme.actionFg
-            enabled -> Color(0xFFA1A1AA)
-            else -> Color(0x50A1A1AA)
-        },
-        fontWeight = FontWeight.Medium,
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .background(
@@ -1042,8 +1229,32 @@ private fun ServerChip(label: String, active: Boolean, enabled: Boolean, onClick
                 },
             )
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-    )
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+    ) {
+        // Health dot: observed during THIS episode's attempts.
+        val dotColor = when {
+            !enabled -> Color(0x33FFFFFF)
+            healthy == true -> Color(0xFF34D399)
+            healthy == false -> Color(0xFFF87171)
+            else -> Color(0x40FFFFFF)
+        }
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(dotColor),
+        )
+        Text(
+            text = label,
+            style = WebTextStyles.xs,
+            color = when {
+                active -> theme.actionFg
+                enabled -> Color(0xFFA1A1AA)
+                else -> Color(0x50A1A1AA)
+            },
+            fontWeight = FontWeight.Medium,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,7 +1311,7 @@ private fun MobileTabs(
 private fun animeIdOf(state: WatchUiState): Int = state.details?.id ?: 0
 
 // ---------------------------------------------------------------------------
-//  Dialogs — download links / report / list (all real API-backed actions)
+//  Download dialog (single + batch qualities)
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -1232,7 +1443,8 @@ private fun DownloadDialog(
                 }
             }
             Text(
-                text = "Downloads include the softsub subtitles and play offline inside Anikage.",
+                text = "Tip: use \"Select episodes\" in the episode list to download several at once. " +
+                    "Downloads include the softsub subtitles and play offline inside Anikage.",
                 style = WebTextStyles.xs,
                 color = Color(0x6BFFFFFF),
                 modifier = Modifier.padding(14.dp),
@@ -1504,7 +1716,6 @@ private fun ListSheet(
 ) {
     val theme = LocalAnikageTheme.current
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     SiteDialog(title = "Add to List", onDismiss = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(20.dp)) {
             Text(
@@ -1562,6 +1773,167 @@ private fun ListSheet(
             }
             Spacer(Modifier.height(12.dp))
             SiteDialogButton(label = "Done", primary = true, enabled = true, onClick = onDismiss)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Login sheet — REAL auth.anikage.cc sign-in (directive #8 / #18)
+// ---------------------------------------------------------------------------
+
+/**
+ * The app's real login: signs in against Anikage's own better-auth backend
+ * (the same service the site's login popup uses). Sign-in needs no captcha;
+ * account creation does (the site handles that) — this sheet links there
+ * honestly instead of faking a signup.
+ */
+@Composable
+fun LoginSheet(
+    onDismiss: () -> Unit,
+    onSignedIn: () -> Unit,
+) {
+    val context = LocalContext.current
+    val theme = LocalAnikageTheme.current
+    var identifier by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    SiteDialog(title = "Sign in to Anikage", onDismiss = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(20.dp)) {
+            Text(
+                text = "Use your anikage.cc account to post comments. Your session stays on this device.",
+                style = WebTextStyles.sm,
+                color = Color(0xFFA1A1AA),
+                lineHeight = 19.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            androidx.compose.material3.OutlinedTextField(
+                value = identifier,
+                onValueChange = { identifier = it },
+                placeholder = {
+                    Text("Email or username", style = WebTextStyles.sm, color = Color(0x61FFFFFF))
+                },
+                singleLine = true,
+                textStyle = WebTextStyles.sm.copy(color = Color.White),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = theme.action,
+                    unfocusedBorderColor = Color(0x24FFFFFF),
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color(0x08FFFFFF),
+                    cursorColor = theme.action,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                placeholder = {
+                    Text("Password", style = WebTextStyles.sm, color = Color(0x61FFFFFF))
+                },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                textStyle = WebTextStyles.sm.copy(color = Color.White),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = theme.action,
+                    unfocusedBorderColor = Color(0x24FFFFFF),
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color(0x08FFFFFF),
+                    cursorColor = theme.action,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            error?.let { err ->
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = err,
+                    style = WebTextStyles.xs,
+                    color = Color(0xFFFCA5A5),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(theme.action)
+                        .clickable(enabled = !busy && identifier.isNotBlank() && password.isNotBlank()) {
+                            busy = true
+                            error = null
+                            scope.launch {
+                                val result = AuthManager.signIn(context, identifier, password)
+                                busy = false
+                                when (result) {
+                                    is AuthManager.SignInResult.Success -> {
+                                        onSignedIn()
+                                        onDismiss()
+                                    }
+                                    is AuthManager.SignInResult.Failure -> {
+                                        error = result.message
+                                    }
+                                }
+                            }
+                        }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            color = theme.actionFg,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    } else {
+                        Text(
+                            text = "Sign in",
+                            style = WebTextStyles.sm,
+                            color = theme.actionFg,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0x14FFFFFF))
+                        .clickable(onClick = onDismiss)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        text = "Not now",
+                        style = WebTextStyles.sm,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "No account yet? Sign-up has a captcha and happens on anikage.cc — " +
+                    "then come back and sign in here.",
+                style = WebTextStyles.xs,
+                color = Color(0x61FFFFFF),
+                lineHeight = 15.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse("https://anikage.cc"),
+                                ),
+                            )
+                        }
+                    }
+                    .padding(vertical = 4.dp),
+            )
         }
     }
 }
@@ -1641,35 +2013,6 @@ private fun SiteDialogButton(
             )
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 9.dp),
-    )
-}
-
-/** Minimal single-line text field matching the site's input styling. */
-@Composable
-private fun OutlinedTextFieldSite(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-) {
-    androidx.compose.material3.OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = {
-            Text(placeholder, style = WebTextStyles.sm, color = Color(0x61FFFFFF))
-        },
-        singleLine = false,
-        maxLines = 3,
-        textStyle = WebTextStyles.sm.copy(color = Color.White),
-        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = LocalAnikageTheme.current.action,
-            unfocusedBorderColor = Color(0x24FFFFFF),
-            focusedContainerColor = Color.Transparent,
-            unfocusedContainerColor = Color(0x08FFFFFF),
-            cursorColor = LocalAnikageTheme.current.action,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
     )
 }
 
@@ -1788,6 +2131,9 @@ private fun EpisodeRow(
     active: Boolean,
     progress: EpisodeProgress?,
     downloaded: Boolean,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {},
     onClick: () -> Unit,
     horizontalPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
 ) {
@@ -1800,16 +2146,54 @@ private fun EpisodeRow(
             .padding(horizontalPadding)
             .padding(vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (active) Color(0x14FFFFFF) else Color.Transparent)
+            .background(
+                when {
+                    selected -> theme.action.copy(alpha = 0.18f)
+                    active -> Color(0x14FFFFFF)
+                    else -> Color.Transparent
+                },
+            )
             .border(
                 1.dp,
-                if (active) Color(0x26FFFFFF) else Color.Transparent,
+                when {
+                    selected -> theme.action.copy(alpha = 0.55f)
+                    active -> Color(0x26FFFFFF)
+                    else -> Color.Transparent
+                },
                 RoundedCornerShape(12.dp),
             )
             .clickable(onClick = onClick)
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Selection checkbox (directive #5) / normal thumbnail.
+        if (selectionMode) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (selected) theme.action else Color(0x0DFFFFFF),
+                    )
+                    .border(
+                        1.dp,
+                        if (selected) theme.action else Color(0x26FFFFFF),
+                        CircleShape,
+                    )
+                    .clickable(onClick = onToggleSelect),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (selected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = "Selected",
+                        tint = theme.actionFg,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+        }
         Box(
             modifier = Modifier
                 .height(76.dp)
@@ -1833,7 +2217,7 @@ private fun EpisodeRow(
                 Box(Modifier.fillMaxSize().background(Color(0x66000000)))
             }
             // Active episode: play overlay.
-            if (active) {
+            if (active && !selectionMode) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -1873,7 +2257,7 @@ private fun EpisodeRow(
                 )
             }
             // Watched checkmark.
-            if (watched && !active) {
+            if (watched && !active && !selectionMode) {
                 Icon(
                     Icons.Default.Check,
                     contentDescription = "Watched",
@@ -1910,7 +2294,9 @@ private fun EpisodeRow(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    text = ep.number.toString(),
+                    text = if (ep.episodeInSeason != null && ep.seasonNumber != null) {
+                        "${ep.episodeInSeason}"
+                    } else ep.number.toString(),
                     style = WebTextStyles.sm,
                     color = if (active) theme.action else theme.fg,
                     fontWeight = FontWeight.Bold,
@@ -1983,7 +2369,7 @@ private fun EpisodeRow(
 }
 
 // ---------------------------------------------------------------------------
-//  Comments — site: header card ("N Comments" + EP pill) + list
+//  Comments — site header + list + REAL composer with login (directive #8)
 // ---------------------------------------------------------------------------
 
 private val AvatarBase = com.anikage.app.Config.ANIKAGE_SITE_ORIGIN
@@ -1995,12 +2381,17 @@ private fun avatarUrl(path: String?): String? = path?.let {
 
 @Composable
 private fun CommentsSection(
-    state: CommentsUiState,
+    state: WatchUiState,
+    viewModel: WatchViewModel,
     episode: Int,
     onRefresh: () -> Unit,
+    onNeedLogin: () -> Unit = {},
     horizontalPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
 ) {
     val theme = LocalAnikageTheme.current
+    var showLogin by remember { mutableStateOf(false) }
+    val comments = state.comments
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2038,7 +2429,7 @@ private fun CommentsSection(
                 }
                 Column {
                     Text(
-                        text = "${state.total} Comments",
+                        text = "${comments.total} Comments",
                         style = WebTextStyles.base,
                         color = theme.fg,
                         fontWeight = FontWeight.Medium,
@@ -2082,32 +2473,246 @@ private fun CommentsSection(
             }
         }
 
-        if (!com.anikage.app.core.settings.SettingsState.commentsEnabled) {
+        if (!SettingsState.commentsEnabled) {
             Text(
                 text = "Comments are turned off in Settings.",
                 style = WebTextStyles.sm,
                 color = theme.fgMuted,
                 modifier = Modifier.padding(16.dp),
             )
-        } else if (state.loading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator(color = theme.action, strokeWidth = 2.dp)
-            }
-        } else if (state.comments.isEmpty()) {
-            Text(
-                text = "No comments yet — be the first to share your thoughts.",
-                style = WebTextStyles.sm,
-                color = theme.fgMuted,
-                modifier = Modifier.padding(16.dp),
-            )
         } else {
-            state.comments.forEach { comment ->
-                CommentRow(comment)
+            // ── Composer (directive #8): REAL posting via auth session ──
+            CommentComposer(
+                state = state,
+                viewModel = viewModel,
+                onNeedLogin = { showLogin = true },
+            )
+            if (comments.justPosted) {
+                LaunchedEffect(Unit) { delay(2500); viewModel.clearCommentTransient() }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x1A22C55E))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Default.Check, null, tint = Color(0xFF6EE7B7), modifier = Modifier.size(13.dp))
+                    Text(
+                        text = "Comment posted.",
+                        style = WebTextStyles.xs,
+                        color = Color(0xFF6EE7B7),
+                    )
+                }
+            }
+            if (comments.loading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = theme.action, strokeWidth = 2.dp)
+                }
+            } else if (comments.comments.isEmpty()) {
+                Text(
+                    text = "No comments yet — be the first to share your thoughts.",
+                    style = WebTextStyles.sm,
+                    color = theme.fgMuted,
+                    modifier = Modifier.padding(16.dp),
+                )
+            } else {
+                comments.comments.forEach { comment ->
+                    CommentRow(comment)
+                }
+            }
+        }
+    }
+
+    if (showLogin) {
+        LoginSheet(
+            onDismiss = { showLogin = false },
+            onSignedIn = onRefresh,
+        )
+    }
+}
+
+/**
+ * The comment composer (directive #8): signed-in users post directly; a
+ * polished login prompt appears otherwise. Duplicate submissions are
+ * prevented by the in-flight gate; the spoiler toggle matches the site.
+ */
+@Composable
+private fun CommentComposer(
+    state: WatchUiState,
+    viewModel: WatchViewModel,
+    onNeedLogin: () -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    val context = LocalContext.current
+    val authed = AuthManager.isAuthenticated
+    val user = AuthManager.user
+    var text by remember { mutableStateOf("") }
+    var spoiler by remember { mutableStateOf(false) }
+    val posting = state.comments.posting
+    val error = state.comments.postError
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x05FFFFFF))
+            .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(12.dp))
+            .padding(10.dp),
+    ) {
+        if (authed) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 8.dp),
+            ) {
+                // The signed-in user's avatar (directive #17).
+                val avatar = user?.avatarUrl()
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(avatarColor(user?.displayLabel?.firstOrNull()?.uppercase() ?: "?")),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (avatar != null) {
+                        AsyncImage(
+                            model = avatar,
+                            contentDescription = user?.displayLabel ?: "You",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Text(
+                            text = user?.displayLabel?.firstOrNull()?.uppercase() ?: "?",
+                            style = WebTextStyles.xs,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Text(
+                    text = "Commenting as ${user?.displayLabel ?: "you"}",
+                    style = WebTextStyles.xs,
+                    color = theme.fgMuted,
+                )
+                Spacer(Modifier.weight(1f))
+                // Spoiler toggle (site: isSpoiler).
+                Text(
+                    text = if (spoiler) "Spoiler: on" else "Spoiler",
+                    style = WebTextStyles.xs2,
+                    color = if (spoiler) Color(0xFFFBBF24) else Color(0x8CA1A1AA),
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (spoiler) Color(0x1AF59E0B) else Color(0x08FFFFFF))
+                        .clickable { spoiler = !spoiler }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+            androidx.compose.material3.OutlinedTextField(
+                value = text,
+                onValueChange = { if (it.length <= 1000) text = it },
+                placeholder = {
+                    Text("Add a comment…", style = WebTextStyles.sm, color = Color(0x61FFFFFF))
+                },
+                minLines = 2,
+                maxLines = 5,
+                textStyle = WebTextStyles.sm.copy(color = Color.White),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = theme.action,
+                    unfocusedBorderColor = Color(0x24FFFFFF),
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color(0x08FFFFFF),
+                    cursorColor = theme.action,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            error?.let { err ->
+                Text(
+                    text = err,
+                    style = WebTextStyles.xs,
+                    color = Color(0xFFFCA5A5),
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "${text.length}/1000",
+                    style = WebTextStyles.xs2,
+                    color = Color(0x4DFFFFFF),
+                )
+                Text(
+                    text = if (posting) "Posting…" else "Post comment",
+                    style = WebTextStyles.xs,
+                    color = if (text.isNotBlank() && !posting) theme.actionFg else Color(0x66FFFFFF),
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (text.isNotBlank() && !posting) theme.action else Color(0x14FFFFFF),
+                        )
+                        .clickable(enabled = text.isNotBlank() && !posting) {
+                            viewModel.postComment(text, spoiler)
+                            text = ""
+                            spoiler = false
+                        }
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                )
+            }
+        } else {
+            // Polished login prompt (directive #18): authenticate, then
+            // return to exactly this composer.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "Join the conversation",
+                        style = WebTextStyles.sm,
+                        color = theme.fg,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Sign in with your anikage.cc account to post comments.",
+                        style = WebTextStyles.xs,
+                        color = theme.fgMuted,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(theme.action)
+                        .clickable(onClick = onNeedLogin)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Login,
+                        contentDescription = null,
+                        tint = theme.actionFg,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        text = "Sign in",
+                        style = WebTextStyles.xs,
+                        color = theme.actionFg,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
         }
     }
@@ -2171,18 +2776,56 @@ private fun CommentRow(comment: AnikageComment) {
                     color = theme.fg,
                     fontWeight = FontWeight.SemiBold,
                 )
+                if (comment.isPinned) {
+                    Text(
+                        text = "PINNED",
+                        style = WebTextStyles.xs2,
+                        color = theme.action,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(theme.action.copy(alpha = 0.12f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
                 Text(
                     text = relativeTime(comment.createdAt),
                     style = WebTextStyles.xs,
                     color = theme.fgMuted,
                 )
+                if (comment.isEdited) {
+                    Text(
+                        text = "edited",
+                        style = WebTextStyles.xs2,
+                        color = Color(0x66FFFFFF),
+                    )
+                }
             }
             Text(
                 text = comment.content,
                 style = WebTextStyles.sm,
-                color = Color(0xFFD4D4D8),
+                color = if (comment.isSpoiler) Color(0xFFFBBF24) else Color(0xFFD4D4D8),
                 lineHeight = 19.5.sp,
             )
+            if (comment.likeCount > 0 || comment.replyCount > 0) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (comment.likeCount > 0) {
+                        Text(
+                            text = "▲ ${comment.likeCount}",
+                            style = WebTextStyles.xs2,
+                            color = Color(0x99FFFFFF),
+                        )
+                    }
+                    if (comment.replyCount > 0) {
+                        Text(
+                            text = "${comment.replyCount} ${if (comment.replyCount == 1) "reply" else "replies"}",
+                            style = WebTextStyles.xs2,
+                            color = Color(0x99FFFFFF),
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,11 +24,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,9 +46,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import coil.compose.AsyncImage
 import com.anikage.app.core.data.db.DownloadedEpisodeEntity
 import com.anikage.app.core.download.EpisodeDownloadEngine
+import com.anikage.app.core.settings.SettingsState
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 
@@ -167,6 +177,79 @@ fun DownloadsScreen(
                         onRetry = { EpisodeDownloadEngine.retry(context, dl.key) },
                         onCancel = { EpisodeDownloadEngine.cancel(context, dl.key) },
                     )
+                }
+                // ── Storage & management card (directive #5) ───────────────
+                item(key = "storage-card") {
+                    var freeText by remember { mutableStateOf("…") }
+                    LaunchedEffect(Unit) {
+                        freeText = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val dir = EpisodeDownloadEngine.downloadsDir(context)
+                            formatBytes(dir.usableSpace)
+                        }
+                    }
+                    var confirmClear by remember { mutableStateOf(false) }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x08FFFFFF))
+                            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
+                            .padding(16.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Storage,
+                                contentDescription = null,
+                                tint = theme.fgMuted,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                text = "Storage",
+                                style = WebTextStyles.base,
+                                color = theme.fg,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                text = "${formatBytes(completedBytes)} used · $freeText free",
+                                style = WebTextStyles.xs,
+                                color = theme.fgMuted,
+                            )
+                        }
+                        if (SettingsState.downloadsWifiOnly) {
+                            Text(
+                                text = "Wi-Fi only downloads are ON — the queue waits for unmetered networks.",
+                                style = WebTextStyles.xs,
+                                color = Color(0xFF6EE7B7),
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = if (confirmClear) "Tap again to confirm" else "Delete all downloads",
+                                style = WebTextStyles.xs,
+                                color = Color(0xFFFCA5A5),
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x14EF4444))
+                                    .clickable {
+                                        if (confirmClear) {
+                                            downloads.forEach { EpisodeDownloadEngine.cancel(context, it.key) }
+                                            confirmClear = false
+                                        } else {
+                                            confirmClear = true
+                                        }
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                            )
+                        }
+                    }
                 }
             }
         }

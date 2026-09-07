@@ -1,5 +1,7 @@
 package com.anikage.app.ui.player
 
+import android.app.Activity
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -9,6 +11,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -32,12 +36,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BookmarkAdded
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Forward
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Forward30
@@ -45,18 +52,22 @@ import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.NextPlan
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Replay30
-import androidx.compose.material.icons.filled.Replay5
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay5
+import androidx.compose.material.icons.filled.ScreenLockPortrait
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.SubtitlesOff
 import androidx.compose.material.icons.filled.Tune
@@ -68,6 +79,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,10 +94,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -97,23 +114,26 @@ import com.anikage.app.core.theme.WebTextStyles
 import kotlinx.coroutines.delay
 
 /**
- * The Anikage custom player — 1:1 with the site's media-chrome player, with
- * every important playback function IN the player (not buried in menus):
+ * The Anikage custom player — every important playback function IN the
+ * player (user directives #3, #7, #15, #16):
  *
- *  - TextureView surface (aspect-locked, screenshot-capable, identity-guarded
- *    attach/detach — the black-video fix)
+ *  - TextureView surface (aspect-locked, identity-guarded attach/detach —
+ *    the black-video fix)
  *  - Auto-hiding controls: seek slider with buffered track + scrub time,
  *    play/pause, prev/next, ±seek (CONFIGURABLE amount), speed pill,
- *    quality pill, audio menu, subtitle toggle + language menu, list
- *    (bookmark) menu, PiP, settings, fullscreen
- *  - Double-tap left/right to seek (configurable, toggleable)
+ *    quality pill, audio menu, subtitle toggle + language menu, servers
+ *    menu, list (bookmark) menu, sleep timer, PiP, orientation lock,
+ *    screenshot, settings, fullscreen
+ *  - Double-tap left/right to seek — ONE polished side ripple island with
+ *    a replay/forward icon + the skipped seconds (directive #3: no random
+ *    floating text; the amount uses the user's configured setting)
+ *  - Vertical edge gestures: left = brightness, right = volume
  *  - Press & hold anywhere -> configurable hold speed (release restores)
+ *  - Live captions rendered over the video + manageable from the CC menu
  *  - Skip Opening / Skip Ending buttons + autoskip (real episode metadata)
  *  - Filler chip + Skip Filler when the current episode is a filler
  *  - "Up next" card with a configurable auto-next countdown
- *  - Custom caption rendering with user caption styles + position
  *  - Buffering + error overlays with retry / switch-server actions
- *  - Hardware-keyboard shortcuts (site: anikage-watch-hotkeys)
  */
 @Composable
 fun AnikagePlayer(
@@ -132,6 +152,15 @@ fun AnikagePlayer(
     // hold-to-speed (press & hold -> configured rate, release -> restore)
     var holdActive by remember { mutableStateOf(false) }
     var quickMenu by remember { mutableStateOf<QuickMenu?>(null) }
+    // Orientation lock (directive #16): locks to the current orientation.
+    var orientationLocked by remember { mutableStateOf(false) }
+    // Gesture levels (vertical edge swipes).
+    var gestureBrightness by remember { mutableFloatStateOf(-1f) }
+    var gestureVolume by remember { mutableFloatStateOf(-1f) }
+
+    val context = LocalContext.current
+    val activity = context as? Activity
+    val window = activity?.window
 
     val seekAmount = SettingsState.seekAmountSec.coerceIn(5, 60)
     val gesturesOn = SettingsState.gestureControls
@@ -145,7 +174,8 @@ fun AnikagePlayer(
             controlsVisible = false
         }
     }
-    // ── feedback auto-dismiss (seek islands only; the hold pill clears on release) ─
+
+    // ── feedback auto-dismiss ────────────────────────────────────────────
     LaunchedEffect(feedback) {
         if (feedback is PlayerFeedback.HoldSpeed) return@LaunchedEffect
         if (feedback != null) {
@@ -154,22 +184,29 @@ fun AnikagePlayer(
         }
     }
 
+    // ── gesture level indicators auto-clear ──────────────────────────────
+    LaunchedEffect(gestureBrightness) {
+        if (gestureBrightness >= 0f) { delay(900); gestureBrightness = -1f }
+    }
+    LaunchedEffect(gestureVolume) {
+        if (gestureVolume >= 0f) { delay(900); gestureVolume = -1f }
+    }
+
     BoxWithConstraints(
         modifier = modifier
             .background(Color.Black)
-            .pointerInput(Unit) {
+            .pointerInput(doubleTapOn, holdOn, seekAmount) {
                 detectTapGestures(
                     onTap = { controlsVisible = !controlsVisible },
                     onDoubleTap = { offset ->
                         if (doubleTapOn) {
                             val width = size.width.toFloat()
-                            val x = offset.x
-                            if (x < width * 0.35f) {
+                            if (offset.x < width * 0.35f) {
                                 viewModel.seekBy(-seekAmount * 1000L)
-                                feedback = PlayerFeedback.SeekBack(-seekAmount * 1000L)
-                            } else if (x > width * 0.65f) {
+                                feedback = PlayerFeedback.SeekBack(seekAmount)
+                            } else if (offset.x > width * 0.65f) {
                                 viewModel.seekBy(seekAmount * 1000L)
-                                feedback = PlayerFeedback.SeekForward(seekAmount * 1000L)
+                                feedback = PlayerFeedback.SeekForward(seekAmount)
                             } else {
                                 viewModel.togglePlayPause()
                             }
@@ -179,7 +216,6 @@ fun AnikagePlayer(
                     },
                     onLongPress = {
                         if (holdOn) {
-                            // Press & hold -> configured speed; release restores.
                             holdActive = true
                             viewModel.beginHoldSpeed()
                             feedback = PlayerFeedback.HoldSpeed(SettingsState.holdSpeedRate)
@@ -195,6 +231,45 @@ fun AnikagePlayer(
                         }
                     },
                 )
+            }
+            .pointerInput(gesturesOn, state.masterVolume) {
+                // Vertical EDGE swipes: left edge = brightness, right edge =
+                // volume (the gesture convention directive #16 asks for).
+                if (!gesturesOn) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val edgePx = 90f
+                    val isLeftEdge = down.position.x < edgePx
+                    val isRightEdge = down.position.x > size.width - edgePx
+                    if (!isLeftEdge && !isRightEdge) return@awaitEachGesture
+                    val isBrightness = isLeftEdge // both edges? left wins
+                    var totalDy = 0f
+                    val startLevel = when {
+                        isBrightness -> window?.attributes?.screenBrightness
+                            ?.takeIf { it >= 0f } ?: 0.5f
+                        else -> state.masterVolume
+                    }
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull() ?: break
+                        totalDy += change.positionChange().y
+                        val range = size.height.toFloat()
+                        val delta = -(totalDy / range) * 0.9f
+                        val level = (startLevel + delta).coerceIn(0.02f, 1f)
+                        if (isBrightness) {
+                            gestureBrightness = level
+                            window?.let { w ->
+                                val params = w.attributes
+                                params.screenBrightness = level
+                                w.attributes = params
+                            }
+                        } else {
+                            gestureVolume = level
+                            viewModel.setVolume(level)
+                        }
+                        if (!change.pressed) break
+                    }
+                }
             },
     ) {
         val playerHeight = maxHeight
@@ -210,7 +285,7 @@ fun AnikagePlayer(
 
         // ── buffering ──────────────────────────────────────────────────────
         PlayerBuffering(
-            visible = state.isBuffering && quickMenu == null && state.embedActive == null,
+            visible = state.isBuffering && quickMenu == null,
             modifier = Modifier.align(Alignment.Center),
         )
 
@@ -226,6 +301,20 @@ fun AnikagePlayer(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = if (captionLift > captionMin) captionLift else captionMin)
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+            )
+        }
+
+        // ── LIVE captions (directive #15): speech-recognition text, rendered
+        //    above the video with the user's caption styling. ───────────────
+        if (state.liveCaptionsActive && !state.liveCaptionText.isNullOrBlank() && quickMenu == null) {
+            LiveCaptionOverlay(
+                text = state.liveCaptionText ?: "",
+                styles = SettingsState.captionStyles,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = if (controlsVisible) 104.dp else 64.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp),
             )
@@ -264,19 +353,45 @@ fun AnikagePlayer(
                 .padding(bottom = if (controlsVisible) 92.dp else 28.dp),
         )
 
-        // ── feedback islands (site: vjs-feedback-island; YouTube-style) ──
+        // ── double-tap seek feedback: ONE polished ripple island (no text) ─
         feedback?.let { fb ->
-            val anchor = when (fb) {
-                is PlayerFeedback.SeekBack -> Alignment.CenterStart
-                is PlayerFeedback.SeekForward -> Alignment.CenterEnd
-                is PlayerFeedback.HoldSpeed -> Alignment.TopCenter
+            when (fb) {
+                is PlayerFeedback.SeekBack -> SeekFeedbackIsland(
+                    seconds = fb.seconds,
+                    forward = false,
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 40.dp),
+                )
+                is PlayerFeedback.SeekForward -> SeekFeedbackIsland(
+                    seconds = fb.seconds,
+                    forward = true,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 40.dp),
+                )
+                is PlayerFeedback.HoldSpeed -> PlayerFeedbackIsland(
+                    feedback = fb,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 56.dp),
+                )
             }
-            PlayerFeedbackIsland(
-                feedback = fb,
-                modifier = Modifier
-                    .align(anchor)
-                    .padding(horizontal = 56.dp)
-                    .padding(top = if (fb is PlayerFeedback.HoldSpeed) 56.dp else 0.dp),
+        }
+
+        // ── gesture level indicator (brightness / volume) ─────────────────
+        if (gestureBrightness >= 0f) {
+            GestureLevelIndicator(
+                icon = Icons.Default.Brightness6,
+                level = gestureBrightness,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+        if (gestureVolume >= 0f) {
+            GestureLevelIndicator(
+                icon = if (gestureVolume <= 0.02f) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                level = gestureVolume,
+                modifier = Modifier.align(Alignment.Center),
             )
         }
 
@@ -293,7 +408,7 @@ fun AnikagePlayer(
         }
 
         // ── error overlay (retry + switch server — report removed) ───────
-        if (state.playbackError != null && !state.streamLoading && state.embedActive == null && state.nextUp == null) {
+        if (state.playbackError != null && !state.streamLoading && state.nextUp == null) {
             PlayerErrorOverlay(
                 message = state.playbackError ?: "",
                 canSwitchServer = state.availableServers.size > 1,
@@ -327,10 +442,29 @@ fun AnikagePlayer(
                 onOpenQuickMenu = { quickMenu = it },
                 onScrubbingChange = { isScrubbing = it },
                 onFeedback = { feedback = it },
+                orientationLocked = orientationLocked,
+                onToggleOrientationLock = {
+                    orientationLocked = !orientationLocked
+                    val a = activity
+                    if (a != null) {
+                        if (orientationLocked) {
+                            val rotation = a.windowManager.defaultDisplay.rotation
+                            a.requestedOrientation = when (rotation) {
+                                android.view.Surface.ROTATION_90, android.view.Surface.ROTATION_270 ->
+                                    android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                            }
+                        } else {
+                            a.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                        }
+                    }
+                },
+                onShare = { shareEpisode(context, state) },
             )
         }
 
-        // ── quick menus (speed / quality / audio / subtitles / list) ─────
+        // ── quick menus (speed / quality / audio / subtitles / servers /
+        //    list / sleep timer) ───────────────────────────────────────────
         quickMenu?.let { menu ->
             PlayerQuickMenu(
                 menu = menu,
@@ -366,7 +500,7 @@ fun AnikagePlayer(
 }
 
 /** Which quick menu is open in the player. */
-enum class QuickMenu { SPEED, QUALITY, AUDIO, SUBTITLES, LIST }
+enum class QuickMenu { SPEED, QUALITY, AUDIO, SUBTITLES, SERVERS, LIST, SLEEP }
 
 /**
  * Video surface: TextureView with the player attached (so screenshots work),
@@ -443,6 +577,9 @@ private fun PlayerControls(
     onOpenQuickMenu: (QuickMenu?) -> Unit,
     onScrubbingChange: (Boolean) -> Unit,
     onFeedback: (PlayerFeedback?) -> Unit,
+    orientationLocked: Boolean,
+    onToggleOrientationLock: () -> Unit,
+    onShare: () -> Unit,
 ) {
     val context = LocalContext.current
     val theme = LocalAnikageTheme.current
@@ -460,39 +597,57 @@ private fun PlayerControls(
                 ),
             ),
     ) {
-        // ── top row: fullscreen back + title ─────────────────────────────
-        if (isFullscreen) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .align(Alignment.TopStart),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+        // ── top row: back + title + subscribe + share ───────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .align(Alignment.TopStart),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (isFullscreen) {
                 PlayerIconButton(onClick = onBack, contentDescription = "Exit fullscreen") {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White)
                 }
+            }
+            Text(
+                text = "${state.title} — EP ${state.episode}",
+                style = WebTextStyles.sm,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 8.dp),
+            )
+            if (state.playingDownloaded) {
                 Text(
-                    text = "${state.title} — EP ${state.episode}",
-                    style = WebTextStyles.sm,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 8.dp),
+                    text = "Downloaded",
+                    style = WebTextStyles.xs,
+                    color = Color(0xFF34D399),
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x3334D399))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
                 )
-                Spacer(Modifier.weight(1f))
-                if (state.playingDownloaded) {
-                    Text(
-                        text = "Downloaded",
-                        style = WebTextStyles.xs,
-                        color = Color(0xFF34D399),
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0x3334D399))
-                            .padding(horizontal = 8.dp, vertical = 3.dp),
-                    )
+            }
+            // Subscribe (directive #12) — also on the details page.
+            PlayerIconButton(
+                onClick = viewModel::toggleSubscription,
+                contentDescription = if (state.subscribed) "Unsubscribe" else "Subscribe",
+            ) {
+                Icon(
+                    if (state.subscribed) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                    null,
+                    tint = if (state.subscribed) theme.action else Color.White,
+                    modifier = Modifier.size(21.dp),
+                )
+            }
+            if (isFullscreen) {
+                PlayerIconButton(onClick = onShare, contentDescription = "Share") {
+                    Icon(Icons.Default.Share, null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             }
         }
@@ -552,7 +707,7 @@ private fun PlayerControls(
                     forward = false,
                     onClick = {
                         viewModel.seekBy(-seekAmount * 1000L)
-                        onFeedback(PlayerFeedback.SeekBack(-seekAmount * 1000L))
+                        onFeedback(PlayerFeedback.SeekBack(seekAmount))
                     },
                 )
                 PlayerIconButton(
@@ -571,7 +726,7 @@ private fun PlayerControls(
                     forward = true,
                     onClick = {
                         viewModel.seekBy(seekAmount * 1000L)
-                        onFeedback(PlayerFeedback.SeekForward(seekAmount * 1000L))
+                        onFeedback(PlayerFeedback.SeekForward(seekAmount))
                     },
                 )
                 PlayerIconButton(
@@ -584,25 +739,26 @@ private fun PlayerControls(
 
                 androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
 
-                // right cluster — every key function lives here now:
-                // speed, subtitles, quality, audio, list, mute, PiP, screenshot
-                // (screenshot + volume live in the settings panel on phones).
+                // right cluster — every key function lives here:
+                // speed, subtitles, quality, servers, audio, list, mute,
+                // sleep, orientation lock, PiP, screenshot, settings, full.
                 SpeedPill(
                     speed = state.speed,
                     onClick = { onOpenQuickMenu(QuickMenu.SPEED) },
                 )
-                if (state.textTracks.isNotEmpty()) {
+                if (state.textTracks.isNotEmpty() || viewModel.liveCaptionsSupported()) {
                     PlayerIconButton(
                         onClick = {
-                            if (state.textTracks.size > 1) onOpenQuickMenu(QuickMenu.SUBTITLES)
-                            else viewModel.toggleCaptions()
+                            if (state.textTracks.size > 1 || viewModel.liveCaptionsSupported()) {
+                                onOpenQuickMenu(QuickMenu.SUBTITLES)
+                            } else viewModel.toggleCaptions()
                         },
                         contentDescription = "Subtitles",
                     ) {
                         Icon(
-                            if (state.captionsOn) Icons.Filled.Subtitles else Icons.Filled.SubtitlesOff,
+                            if (state.captionsOn || state.liveCaptionsActive) Icons.Filled.Subtitles else Icons.Filled.SubtitlesOff,
                             null,
-                            tint = if (state.captionsOn) theme.action else Color.White,
+                            tint = if (state.captionsOn || state.liveCaptionsActive) theme.action else Color.White,
                         )
                     }
                 }
@@ -610,6 +766,15 @@ private fun PlayerControls(
                     label = state.qualities.firstOrNull { it.isSelected }?.label ?: "Auto",
                     onClick = { onOpenQuickMenu(QuickMenu.QUALITY) },
                 )
+                // Servers (directive #7): switch without leaving the video.
+                if (state.availableServers.size > 1) {
+                    PlayerIconButton(
+                        onClick = { onOpenQuickMenu(QuickMenu.SERVERS) },
+                        contentDescription = "Servers",
+                    ) {
+                        Icon(Icons.Filled.Dns, null, tint = Color.White, modifier = Modifier.size(21.dp))
+                    }
+                }
                 if (state.audioTracks.size > 1) {
                     PlayerIconButton(
                         onClick = { onOpenQuickMenu(QuickMenu.AUDIO) },
@@ -639,7 +804,29 @@ private fun PlayerControls(
                         tint = Color.White,
                     )
                 }
+                // Sleep timer (directive #16).
+                PlayerIconButton(
+                    onClick = { onOpenQuickMenu(QuickMenu.SLEEP) },
+                    contentDescription = "Sleep timer",
+                ) {
+                    Icon(
+                        Icons.Filled.Bedtime, null,
+                        tint = if (state.sleepTimerSec > 0) theme.action else Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
                 if (isFullscreen) {
+                    // Orientation lock (directive #16).
+                    PlayerIconButton(
+                        onClick = onToggleOrientationLock,
+                        contentDescription = if (orientationLocked) "Unlock orientation" else "Lock orientation",
+                    ) {
+                        Icon(
+                            Icons.Filled.ScreenLockPortrait, null,
+                            tint = if (orientationLocked) theme.action else Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                     PlayerIconButton(
                         onClick = { takeScreenshot(context, viewModel, state) },
                         contentDescription = "Screenshot",
@@ -666,6 +853,14 @@ private fun PlayerControls(
                         tint = Color.White,
                     )
                 }
+            }
+            if (state.sleepTimerSec > 0) {
+                Text(
+                    text = "Sleep timer: ${formatPlayerTime(state.sleepTimerSec * 1000L)} left",
+                    style = WebTextStyles.xs,
+                    color = Color(0xCCFFFFFF),
+                    modifier = Modifier.padding(start = 6.dp, bottom = 2.dp),
+                )
             }
         }
     }
@@ -696,7 +891,7 @@ private fun SeekIconButton(
             else -> Icons.Filled.Replay
         }
     }
-    if ((forward && amountSec !in listOf(5, 10, 30)) || (!forward && amountSec !in listOf(5, 10, 30))) {
+    if (amountSec !in listOf(5, 10, 30)) {
         // custom amount: icon + small overlay label
         PlayerIconButton(onClick = onClick, contentDescription = "${if (forward) "Forward" else "Back"} $amountSec seconds") {
             Box(contentAlignment = Alignment.Center) {
@@ -724,7 +919,6 @@ private fun SeekIconButton(
 /** Speed pill — shows the live speed, opens the quick menu. */
 @Composable
 private fun SpeedPill(speed: Float, onClick: () -> Unit) {
-    val theme = LocalAnikageTheme.current
     val label = if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${"%.2f".format(speed).trimEnd('0').trimEnd('.')}x"
     Text(
         text = label,
@@ -757,6 +951,20 @@ private fun QualityPill(label: String, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 6.dp),
     )
+}
+
+/** Share the episode (site: share button -> share sheet). */
+private fun shareEpisode(context: android.content.Context, state: WatchUiState) {
+    val url = "https://anikage.cc/anime/watch/${state.slug ?: state.details?.id ?: ""}?ep=${state.episode}"
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TITLE, state.title)
+        putExtra(
+            Intent.EXTRA_TEXT,
+            "Watch ${state.title} — Episode ${state.episode} on Anikage: $url",
+        )
+    }
+    runCatching { context.startActivity(Intent.createChooser(send, "Share")) }
 }
 
 /** Save a screenshot of the current frame (site: camera button -> PNG). */
@@ -868,38 +1076,93 @@ private fun PlayerSeekRow(
 }
 
 // ---------------------------------------------------------------------------
-//  Feedback (site: vjs-feedback-island)
+//  Feedback (site: vjs-feedback-island) — directive #3 rebuild
 // ---------------------------------------------------------------------------
 
 sealed interface PlayerFeedback {
-    data class SeekForward(val amountMs: Long) : PlayerFeedback
-    data class SeekBack(val amountMs: Long) : PlayerFeedback
+    /** Double-tap / button seek feedback; [seconds] uses the configured amount. */
+    data class SeekForward(val seconds: Int) : PlayerFeedback
+    data class SeekBack(val seconds: Int) : PlayerFeedback
     data class HoldSpeed(val speed: Float) : PlayerFeedback
 }
 
+/**
+ * THE double-tap seek feedback (directive #3): one polished side island —
+ * a dark translucent circle with a replay/forward icon and the skip amount
+ * as a small chip BELOW it. Spring pop-in, quick fade-out, nothing else.
+ * Uses the user's CONFIGURED seek amount; no random floating text.
+ */
+@Composable
+private fun SeekFeedbackIsland(
+    seconds: Int,
+    forward: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val pop = remember { androidx.compose.animation.core.Animatable(0.55f) }
+    LaunchedEffect(seconds, forward) {
+        pop.snapTo(0.55f)
+        pop.animateTo(
+            1f,
+            androidx.compose.animation.core.spring(
+                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+                stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
+            ),
+        )
+    }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = modifier.graphicsLayer {
+            scaleX = pop.value
+            scaleY = pop.value
+            alpha = ((pop.value - 0.55f) / 0.45f).coerceIn(0f, 1f)
+        },
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(Color(0x99000000))
+                .border(1.dp, Color(0x40FFFFFF), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Double chevron for direction + the configured seconds badge.
+            Row(horizontalArrangement = Arrangement.Center) {
+                if (!forward) {
+                    Icon(Icons.Filled.ChevronLeft, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                    Icon(Icons.Filled.ChevronLeft, null, tint = Color(0xB3FFFFFF), modifier = Modifier.size(22.dp))
+                } else {
+                    Icon(Icons.Filled.ChevronRight, null, tint = Color(0xB3FFFFFF), modifier = Modifier.size(22.dp))
+                    Icon(Icons.Filled.ChevronRight, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                }
+            }
+            Text(
+                text = "${seconds}s",
+                style = WebTextStyles.xs2,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 7.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0x33FFFFFF))
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+/** Hold-speed pill (top center) — "2x speed" while the surface is held. */
 @Composable
 private fun PlayerFeedbackIsland(feedback: PlayerFeedback, modifier: Modifier = Modifier) {
     val label = when (feedback) {
-        is PlayerFeedback.SeekForward -> "+${feedback.amountMs / 1000}s"
-        is PlayerFeedback.SeekBack -> "-${kotlin.math.abs(feedback.amountMs) / 1000}s"
+        is PlayerFeedback.SeekForward -> "+${feedback.seconds}s"
+        is PlayerFeedback.SeekBack -> "-${feedback.seconds}s"
         is PlayerFeedback.HoldSpeed -> "${feedback.speed}x speed"
-    }
-    // Pop-in: scale 0.6 -> 1 with a spring, fade in (fresh mount each time).
-    val pop = remember { androidx.compose.animation.core.Animatable(0.6f) }
-    LaunchedEffect(feedback) {
-        pop.snapTo(0.6f)
-        pop.animateTo(1f, androidx.compose.animation.core.spring(
-            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
-            stiffness = androidx.compose.animation.core.Spring.StiffnessMedium,
-        ))
     }
     Row(
         modifier = modifier
-            .graphicsLayer {
-                scaleX = pop.value
-                scaleY = pop.value
-                alpha = ((pop.value - 0.6f) / 0.4f).coerceIn(0f, 1f)
-            }
+            .graphicsLayer { alpha = 1f }
             .clip(RoundedCornerShape(999.dp))
             .background(Color(0xB3000000))
             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -908,21 +1171,15 @@ private fun PlayerFeedbackIsland(feedback: PlayerFeedback, modifier: Modifier = 
     ) {
         when (feedback) {
             is PlayerFeedback.SeekBack -> Icon(
-                Icons.Filled.ChevronLeft,
-                contentDescription = null,
-                tint = Color.White,
+                Icons.Filled.ChevronLeft, contentDescription = null, tint = Color.White,
                 modifier = Modifier.size(20.dp),
             )
             is PlayerFeedback.SeekForward -> Icon(
-                Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = Color.White,
+                Icons.Filled.ChevronRight, contentDescription = null, tint = Color.White,
                 modifier = Modifier.size(20.dp),
             )
             is PlayerFeedback.HoldSpeed -> Icon(
-                Icons.Filled.Speed,
-                contentDescription = null,
-                tint = Color.White,
+                Icons.Filled.Speed, contentDescription = null, tint = Color.White,
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -934,9 +1191,48 @@ private fun PlayerFeedbackIsland(feedback: PlayerFeedback, modifier: Modifier = 
     }
 }
 
+/** Brightness / volume gesture indicator (vertical swipe on an edge). */
+@Composable
+private fun GestureLevelIndicator(
+    icon: ImageVector,
+    level: Float,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xB3000000))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+        Box(
+            modifier = Modifier
+                .width(120.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Color(0x33FFFFFF)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(level.coerceIn(0f, 1f))
+                    .fillMaxSize()
+                    .background(Color.White),
+            )
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
-//  Quick menus — speed / quality / audio / subtitles / list
+//  Quick menus — speed / quality / audio / subtitles / servers / list / sleep
 // ---------------------------------------------------------------------------
+
+/** RECORD_AUDIO granted check (needed before starting live captions). */
+private fun android.content.Context.hasMicPermission(): Boolean =
+    androidx.core.content.ContextCompat.checkSelfPermission(
+        this, android.Manifest.permission.RECORD_AUDIO,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
 @Composable
 private fun PlayerQuickMenu(
@@ -953,7 +1249,9 @@ private fun PlayerQuickMenu(
         QuickMenu.QUALITY -> "Quality"
         QuickMenu.AUDIO -> "Audio"
         QuickMenu.SUBTITLES -> "Subtitles / CC"
+        QuickMenu.SERVERS -> "Servers"
         QuickMenu.LIST -> "My list"
+        QuickMenu.SLEEP -> "Sleep timer"
     }
     Box(
         modifier = modifier
@@ -1033,7 +1331,7 @@ private fun PlayerQuickMenu(
                                 onClick = { viewModel.selectQuality(q) },
                             )
                         }
-                        QuickMenuHint("Auto adapts to your connection speed.")
+                        QuickMenuHint("Your pick is saved and reused on the next episode.")
                     }
                 }
                 QuickMenu.AUDIO -> {
@@ -1047,20 +1345,92 @@ private fun PlayerQuickMenu(
                     if (state.audioTracks.isEmpty()) QuickMenuHint("This stream has a single audio track.")
                 }
                 QuickMenu.SUBTITLES -> {
-                    QuickMenuRow(
-                        label = "Off",
-                        selected = !state.captionsOn,
-                        onClick = { viewModel.selectTextTrack(null) },
-                    )
-                    state.textTracks.forEach { t ->
+                    // Microphone permission gate for live captions (directive
+                    // #15): the runtime request happens right here, and the
+                    // captions start the moment it's granted.
+                    val micPermission = rememberLauncherForActivityResult(
+                        ActivityResultContracts.RequestPermission(),
+                    ) { granted ->
+                        if (granted) viewModel.startLiveCaptions()
+                        else viewModel.reportLiveCaptionPermissionDenied()
+                    }
+                    if (state.textTracks.isNotEmpty()) {
                         QuickMenuRow(
-                            label = t.label,
-                            selected = t.isSelected,
-                            onClick = { viewModel.selectTextTrack(t) },
+                            label = "Off",
+                            selected = !state.captionsOn,
+                            onClick = { viewModel.selectTextTrack(null) },
+                        )
+                        state.textTracks.forEach { t ->
+                            QuickMenuRow(
+                                label = t.label,
+                                selected = t.isSelected,
+                                onClick = { viewModel.selectTextTrack(t) },
+                            )
+                        }
+                    } else if (!viewModel.liveCaptionsSupported()) {
+                        QuickMenuHint("No subtitle tracks in this stream.")
+                    }
+                    // ── Live Captions (directive #15): a REAL on-device
+                    //    speech-recognition caption track for the audio.
+                    if (viewModel.liveCaptionsSupported()) {
+                        QuickMenuSectionLabel("LIVE CAPTIONS")
+                        QuickMenuRow(
+                            label = if (state.liveCaptionsActive) "Live captions — on" else "Live captions (on-device)",
+                            selected = state.liveCaptionsActive,
+                            onClick = {
+                                if (state.liveCaptionsActive) {
+                                    viewModel.stopLiveCaptions()
+                                } else if (context.hasMicPermission()) {
+                                    viewModel.startLiveCaptions()
+                                } else {
+                                    micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
+                        )
+                        if (state.liveCaptionsError != null) {
+                            QuickMenuHint(state.liveCaptionsError ?: "")
+                        } else {
+                            QuickMenuHint(
+                                "Recognizes the playing audio on this device and captions it live. " +
+                                    "Works best with speaker playback; uses your caption style.",
+                            )
+                        }
+                    }
+                    if (state.textTracks.isNotEmpty()) {
+                        QuickMenuHint("Style them in Settings -> Captions.")
+                    }
+                }
+                QuickMenu.SERVERS -> {
+                    state.availableServers.forEach { server ->
+                        val active = server.name.equals(state.streamServer, ignoreCase = true) ||
+                            server.id.equals(state.streamServer, ignoreCase = true)
+                        QuickMenuRow(
+                            label = server.name,
+                            selected = active,
+                            trailing = {
+                                // Observed health dot: green = streaming ok,
+                                // red = failed this session, dim = unchecked.
+                                val dot = when (server.healthy) {
+                                    true -> Color(0xFF34D399)
+                                    false -> Color(0xFFF87171)
+                                    null -> Color(0x59FFFFFF)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(dot),
+                                )
+                            },
+                            onClick = {
+                                if (!active) {
+                                    viewModel.setStreamServer(server.name)
+                                    onDismiss()
+                                }
+                            },
                         )
                     }
-                    if (state.textTracks.isEmpty()) QuickMenuHint("No subtitle tracks in this stream. Try a softsub server (Koto).")
-                    else QuickMenuHint("Style them in Settings -> Captions.")
+                    QuickMenuHint("Failing servers are skipped automatically.")
                 }
                 QuickMenu.LIST -> {
                     listOf(
@@ -1084,11 +1454,40 @@ private fun PlayerQuickMenu(
                         destructive = true,
                         onClick = { viewModel.setListStatus(null) },
                     )
-                    QuickMenuHint("Saved on this device${if (com.anikage.app.core.settings.SettingsState.incognito) " (incognito blocks changes)" else ""}.")
+                    QuickMenuHint("Saved on this device${if (SettingsState.incognito) " (incognito blocks changes)" else ""}.")
+                }
+                QuickMenu.SLEEP -> {
+                    if (state.sleepTimerSec > 0) {
+                        QuickMenuRow(
+                            label = "Off (currently ${formatPlayerTime(state.sleepTimerSec * 1000L)})",
+                            selected = false,
+                            onClick = { viewModel.setSleepTimer(0) },
+                        )
+                    }
+                    listOf(5, 10, 15, 20, 30, 45, 60, 90).forEach { minutes ->
+                        QuickMenuRow(
+                            label = if (minutes >= 60) "${minutes / 60} hour${if (minutes >= 120) "s" else ""}" else "$minutes minutes",
+                            selected = false,
+                            onClick = { viewModel.setSleepTimer(minutes) },
+                        )
+                    }
+                    QuickMenuHint("Playback pauses when the timer runs out.")
                 }
             }
         }
     }
+}
+
+@Composable
+private fun QuickMenuSectionLabel(text: String) {
+    Text(
+        text = text,
+        style = WebTextStyles.xs2,
+        color = Color(0x70FFFFFF),
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 1.sp,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+    )
 }
 
 @Composable
@@ -1097,6 +1496,7 @@ private fun QuickMenuRow(
     selected: Boolean,
     onClick: () -> Unit,
     destructive: Boolean = false,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val theme = LocalAnikageTheme.current
     Row(
@@ -1120,7 +1520,9 @@ private fun QuickMenuRow(
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             modifier = Modifier.weight(1f),
         )
-        if (selected) {
+        if (trailing != null) {
+            trailing()
+        } else if (selected) {
             Icon(
                 Icons.Default.Check,
                 contentDescription = null,
@@ -1370,7 +1772,7 @@ private fun CaptionOverlay(
     cues: List<Cue>,
     styles: CaptionStyles,
     fullscreen: Boolean,
-    playerHeight: androidx.compose.ui.unit.Dp,
+    playerHeight: Dp,
     modifier: Modifier = Modifier,
 ) {
     val text = cues.mapNotNull { it.text?.toString() }.joinToString("\n")
@@ -1405,6 +1807,66 @@ private fun CaptionOverlay(
                 .clip(RoundedCornerShape(2.dp))
                 .background(cueBg)
                 .padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
+}
+
+/**
+ * LIVE captions line (directive #15): the current recognition phrase with
+ * the user's caption styling, marked with a small "CC LIVE" tag so it's
+ * clearly the live track (not a subtitle file).
+ */
+@Composable
+private fun LiveCaptionOverlay(
+    text: String,
+    styles: CaptionStyles,
+    modifier: Modifier = Modifier,
+) {
+    val textColor = Color(styles.textColor).copy(alpha = styles.textOpacity)
+    val cueBg = Color(styles.textBg).let {
+        if (styles.textBgOpacity > 0f) it.copy(alpha = styles.textBgOpacity) else Color(0xAA000000)
+    }
+    val fontSize = 15.sp * styles.fontSize
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color(0x66000000))
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+        ) {
+            Icon(
+                Icons.Default.Subtitles, null,
+                tint = Color(0xFFA1A1AA),
+                modifier = Modifier.size(12.dp),
+            )
+            Text(
+                text = "LIVE",
+                style = WebTextStyles.xs2,
+                color = Color(0xFFA1A1AA),
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+            )
+        }
+        Text(
+            text = text,
+            style = WebTextStyles.base.copy(
+                fontSize = fontSize,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                lineHeight = fontSize * 1.25f,
+            ),
+            color = textColor,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(cueBg)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
         )
     }
 }
@@ -1513,3 +1975,4 @@ internal fun PlayerIconButton(
         }
     }
 }
+

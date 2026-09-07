@@ -40,10 +40,10 @@ object Config {
     const val APP_SHORT_NAME = "Anikage"
 
     /** Version label (shown in About). */
-    const val APP_VERSION = "2.1.0"
+    const val APP_VERSION = "2.2.0"
 
     /** Version code (integer; bump for every release). */
-    const val APP_VERSION_CODE = 21
+    const val APP_VERSION_CODE = 22
 
     /** About / credits line. */
     val ABOUT_TEXT =
@@ -732,7 +732,7 @@ object Config {
          * Home / Browse / Schedule / Music / Torrents.
          */
         val TOP_LEVEL_SCREENS = listOf(
-            "home", "browse", "schedule", "music", "torrents",
+            "home", "browse", "schedule", "music", "subscriptions",
         )
 
         /**
@@ -753,9 +753,6 @@ object Config {
     object Features {
         /** Music tab — Anikage has this. Shows anime OST / opening theme info. */
         const val ENABLE_MUSIC_SCREEN = true
-
-        /** Torrents tab — Anikage has this (links to Nyaa.si etc.). Disabled by default for legal reasons. */
-        const val ENABLE_TORRENTS_SCREEN = true
 
         /** Continue Watching rail on Home — uses locally-stored watch history. */
         const val ENABLE_CONTINUE_WATCHING = true

@@ -1,5 +1,7 @@
 package com.anikage.app.ui.details
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,15 +30,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.BookmarkAdded
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,7 +70,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.model.Anime
-import com.anikage.app.core.data.model.AnimeDetails
+import com.anikage.app.core.download.EpisodeDownloadEngine
+import com.anikage.app.core.settings.SettingsState
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.core.util.HtmlText
@@ -69,22 +81,15 @@ import com.anikage.app.ui.components.SectionBadge
 import com.anikage.app.ui.components.SectionHeader
 import com.anikage.app.ui.components.SiteCarouselRow
 import com.anikage.app.ui.components.SkeletonBlock
-import android.content.Intent
-import android.net.Uri
+import kotlinx.coroutines.launch
 
 /**
- * DETAILS — 1:1 port of anikage.cc/anime/info/{id} (mobile).
- *
- * Site layout:
- *   ├─ banner area h-350px (AniList banner + bottom gradient to surface)
- *   ├─ poster 170x245 centered, overlapping the banner by ~58%
- *   ├─ title text-3xl extrabold (gradient fg→fg/75, centered, drop shadow)
- *   ├─ meta chips h-7 rounded-lg: score(amber) status(emerald) episodes
- *   ├─ Play Now split-button (bg-action h-9 rounded-xl) + 3 round icon btns
- *   ├─ tab pills: Overview / Seasons / Characters / Artwork / Music
- *   ├─ Overview: next-ep banner + info strip + synopsis card + genres
- *   ├─ Episodes: rows (h-76 thumb + EP badge + title + desc)
- *   └─ Recommendations carousel
+ * DETAILS — the app's full custom anime page (directive #14): hero banner +
+ * poster + title + meta chips, an action row (Continue Watching / Play Now,
+ * Subscribe, Add to List, Trailer, Share), a rich info grid (studio, year,
+ * type, episodes, duration, season, status), synopsis + genres, an episode
+ * list with SEASON SWITCHING + watched/downloaded markers + selection
+ * downloads (directive #5/#6), characters, relations and recommendations.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -102,6 +107,10 @@ fun DetailsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val theme = LocalAnikageTheme.current
     var showListSheet by remember { mutableStateOf(false) }
+    // Selection downloads (directive #5) straight from the episode layout.
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedEpisodes by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    val downloadStates by EpisodeDownloadEngine.statesFlow.collectAsStateWithLifecycle()
 
     if (state.loading) {
         // Branded loading state — the site pulses surface-card placeholders
@@ -123,10 +132,13 @@ fun DetailsScreen(
     }
 
     val details = state.details ?: return
+    val visibleEpisodes = remember(state.episodes, state.selectedSeason) {
+        state.seasons.firstOrNull { it.key == state.selectedSeason }?.episodes ?: state.episodes
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(theme.surface)) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
-        // ── Banner + poster + title block ────────────────────────────────
+        // ── Banner + poster + title + meta + actions ─────────────────────
         item(key = "hero") {
             Box(modifier = Modifier.fillMaxWidth()) {
                 // Banner: site h-[350px] with bottom gradient.
@@ -153,8 +165,7 @@ fun DetailsScreen(
                             )
                     )
                 }
-                // Back button over the banner (site: info page back button,
-                // h-10 w-10 rounded-xl border-white/6 bg-white/3).
+                // Back button over the banner (site: info page back button).
                 Box(
                     modifier = Modifier
                         .statusBarsPadding()
@@ -202,7 +213,7 @@ fun DetailsScreen(
                         }
                     }
 
-                    // Title — gradient text, centered (site: text-3xl 700 tracking-tight).
+                    // Title — gradient text, centered.
                     Spacer(Modifier.height(16.dp))
                     Text(
                         text = details.displayTitle(),
@@ -216,7 +227,7 @@ fun DetailsScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = 32.dp),
                     )
-                    // Romaji subtitle (site: text-sm fg-muted/90, sm+ only).
+                    // Romaji subtitle.
                     details.title.romaji?.takeIf { it != details.displayTitle() }?.let { romaji ->
                         Text(
                             text = romaji,
@@ -229,7 +240,7 @@ fun DetailsScreen(
                         )
                     }
 
-                    // Meta chips — site: h-7 rounded-lg, gap-1.5.
+                    // Meta chips — score / status / episodes / format.
                     Row(
                         modifier = Modifier.padding(top = 12.dp, bottom = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -237,14 +248,13 @@ fun DetailsScreen(
                         details.averageScore?.let { score ->
                             DetailChip(
                                 leading = {
-                                    // Site: lucide-star h-3.5 fill-amber-400/90.
                                     LucideStarFilled(
                                         tint = Color(0xE6FBBF24),
                                         modifier = Modifier.size(14.dp),
                                     )
                                 },
                                 text = "%.1f".format(score / 10.0),
-                                textTint = Color(0xFFFDE68A),      // amber-200
+                                textTint = Color(0xFFFDE68A),
                                 bg = theme.surface.copy(alpha = 0.60f),
                                 border = Color(0x40FBBF24),
                                 bold = true,
@@ -253,7 +263,7 @@ fun DetailsScreen(
                         details.status?.let { st ->
                             DetailChip(
                                 text = st.replace('_', ' ').replaceFirstChar { it.uppercase() },
-                                textTint = Color(0xFF6EE7B7),      // emerald-300
+                                textTint = Color(0xFF6EE7B7),
                                 bg = Color(0x3322C55E),
                                 border = Color(0x3322C55E),
                                 bold = true,
@@ -268,65 +278,80 @@ fun DetailsScreen(
                                 border = Color(0x1AFFFFFF),
                             )
                         }
+                        details.format?.let { fmt ->
+                            DetailChip(
+                                text = fmt,
+                                textTint = theme.fgMuted,
+                                bg = theme.surface.copy(alpha = 0.60f),
+                                border = Color(0x1AFFFFFF),
+                                upperCase = true,
+                            )
+                        }
                     }
 
-                    // Play Now — split button (site: bg-action + border-l edit).
+                    // ── Action row (directive #14): Continue/Play, Subscribe,
+                    //    List, Trailer, Share — all REAL actions. ───────────
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        val continueEp = state.continueEpisode
+                        val label = if (continueEp > 0) "Continue EP $continueEp" else "Play Now"
                         Row(
                             modifier = Modifier
                                 .shadow(8.dp, RoundedCornerShape(12.dp), spotColor = Color(0x4D000000))
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(theme.action)
-                                .clickable { onWatchClick(details.id, 0, state.slug) }
-                                .height(36.dp),
+                                .clickable {
+                                    val ep = if (continueEp > 0) continueEp else 0
+                                    onWatchClick(details.id, ep, state.slug)
+                                }
+                                .height(36.dp)
+                                .padding(horizontal = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier
-                                    .clickable { onWatchClick(details.id, 0, state.slug) }
-                                    .padding(start = 16.dp, end = 14.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    tint = theme.actionFg,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                                Text(
-                                    text = "Play Now",
-                                    style = WebTextStyles.sm,
-                                    color = theme.actionFg,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            }
-                            // Split edit button (site: border-l bg-surface-input) —
-                            // list management needs an anikage.cc account; opens
-                            // the site where lists sync (honest, like the site's
-                            // signed-out login prompt).
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(theme.surfaceInput)
-                                    .clickable { showListSheet = true }
-                                    .width(44.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Default.Edit,
-                                    contentDescription = "Edit list entry",
-                                    tint = theme.fgMuted,
-                                    modifier = Modifier.size(18.dp),
-                                )
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = theme.actionFg,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                text = label,
+                                style = WebTextStyles.sm,
+                                color = theme.actionFg,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        // Subscribe (directive #12) — real notification engine.
+                        RoundStateAction(
+                            icon = if (state.subscribed) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                            active = state.subscribed,
+                            description = if (state.subscribed) "Subscribed" else "Subscribe",
+                        ) { viewModel.toggleSubscription() }
+                        // Add to list — local list (same store as watch page).
+                        RoundStateAction(
+                            icon = if (state.listStatus != null) Icons.Default.BookmarkAdded else Icons.Default.BookmarkAdd,
+                            active = state.listStatus != null,
+                            description = "Add to list",
+                        ) { showListSheet = true }
+                        // Trailer — opens the real YouTube trailer (site: trailerId).
+                        if (!details.trailerId.isNullOrBlank() || details.trailer?.id != null) {
+                            RoundAction(Icons.Default.Movie) {
+                                val id = details.trailerId ?: details.trailer?.id
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse("https://www.youtube.com/watch?v=$id"),
+                                        ),
+                                    )
+                                }
                             }
                         }
-                        // Round icon buttons (site: size-9, share/bookmark).
+                        // Share — real share sheet with the site's info URL.
                         RoundAction(Icons.Default.Share) {
-                            // Real share sheet: title + the site's info URL.
                             val send = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
                                 putExtra(Intent.EXTRA_TITLE, details.displayTitle())
@@ -338,14 +363,13 @@ fun DetailsScreen(
                             }
                             context.startActivity(Intent.createChooser(send, "Share"))
                         }
-                        RoundAction(Icons.Default.BookmarkAdd) { showListSheet = true }
                     }
                 }
             }
             Spacer(Modifier.height(20.dp))
         }
 
-        // ── Overview: synopsis card + genres + next-episode banner ─────────
+        // ── Overview: next-episode + info grid + synopsis + genres ────────
         item(key = "overview") {
             Column(
                 modifier = Modifier
@@ -353,9 +377,7 @@ fun DetailsScreen(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // Honest degraded-mode notice: the page is rendering from the
-                // list data the app already had (real data, not placeholders);
-                // full enrichment (cast/relations) is temporarily unavailable.
+                // Honest degraded-mode notice.
                 state.degradedNotice?.let { notice ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -380,6 +402,7 @@ fun DetailsScreen(
                         )
                     }
                 }
+
                 // Next-episode banner (site: emerald-500/10 border pill).
                 details.nextAiringEpisode?.let { next ->
                     val days = next.timeUntilAiring / 86400
@@ -404,29 +427,48 @@ fun DetailsScreen(
                             style = WebTextStyles.sm,
                             color = Color(0xCCFFFFFF),
                         )
+                        if (state.subscribed) {
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                text = "You'll be notified",
+                                style = WebTextStyles.xs,
+                                color = Color(0xFF6EE7B7),
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
                     }
                 }
 
-                // Info strip (site: rounded-2xl border white/6 bg white/3).
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                // ── Info grid (directive #14: studio, year, type, episodes,
+                //    duration, season, status) — site: rounded-2xl card. ──
+                Column(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0x08FFFFFF))
                         .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(14.dp),
                 ) {
-                    details.format?.let { fmt ->
-                        Pill(text = fmt.uppercase(), bold = true)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        details.mainStudio()?.name?.let { InfoCell("Studio", it) }
+                        details.seasonYear?.let { InfoCell("Year", it.toString()) }
+                        details.format?.let { InfoCell("Type", it.uppercase()) }
+                        details.duration?.takeIf { it > 0 }?.let { InfoCell("Duration", "${it}m") }
                     }
-                    details.startDate?.let { d ->
-                        Pill(text = "Aired ${d.formatShort()}", muted = true)
-                    }
-                    details.seasonYear?.let { y ->
-                        if (details.format == null && details.startDate == null) {
-                            Pill(text = y.toString(), muted = true)
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        details.season?.let {
+                            InfoCell("Season", "${it.replaceFirstChar { c -> c.uppercase() }} ${details.seasonYear ?: ""}")
                         }
+                        details.status?.let { InfoCell("Status", it.replace('_', ' ')) }
+                        details.episodes?.takeIf { it > 0 }?.let { InfoCell("Episodes", it.toString()) }
+                        details.favourites?.takeIf { it > 0 }?.let { InfoCell("Favourites", "%,d".format(it)) }
                     }
                 }
 
@@ -454,7 +496,7 @@ fun DetailsScreen(
                     )
                 }
 
-                // Genres (site: flex-wrap gap-1.5; first 3 accent-tinted).
+                // Genres (site: flex-wrap gap-1.5).
                 if (details.genres.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -465,11 +507,13 @@ fun DetailsScreen(
                             Text(
                                 text = genre,
                                 style = WebTextStyles.xs,
-                                color = if (accent) Color(0xFFA6A6A6) else Color(0xFFA6A6A6),
+                                color = Color(0xFFA6A6A6),
                                 fontWeight = FontWeight.Normal,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
-                                    .background(if (accent) theme.accent.copy(alpha = 0.10f) else Color(0x0DFFFFFF))
+                                    .background(
+                                        if (accent) theme.accent.copy(alpha = 0.10f) else Color(0x0DFFFFFF),
+                                    )
                                     .border(
                                         1.dp,
                                         if (accent) theme.accent.copy(alpha = 0.25f) else Color(0x0FFFFFFF),
@@ -483,7 +527,7 @@ fun DetailsScreen(
             }
         }
 
-        // ── Episodes ──────────────────────────────────────────────────────
+        // ── Episodes: season selector + selection downloads + rows ──────
         if (state.episodes.isNotEmpty()) {
             item(key = "episodes-header") {
                 Column(modifier = Modifier.padding(horizontal = 16.dp)) {
@@ -491,12 +535,187 @@ fun DetailsScreen(
                     SectionHeader(title = "Episodes")
                 }
             }
-            items(state.episodes, key = { it.number }) { ep ->
+            // Season chips (directive #6) + selection toolbar (directive #5).
+            if (state.seasons.size > 1 || true) {
+                item(key = "season-bar") {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        if (state.seasons.size > 1) {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(bottom = 8.dp),
+                            ) {
+                                items(state.seasons, key = { it.key }) { season ->
+                                    val selected = season.key == state.selectedSeason
+                                    Text(
+                                        text = season.label,
+                                        style = WebTextStyles.xs,
+                                        color = if (selected) theme.actionFg else Color(0xFFD4D4D8),
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(50))
+                                            .background(if (selected) theme.action else Color(0x0DFFFFFF))
+                                            .border(
+                                                1.dp,
+                                                if (selected) Color.Transparent else Color(0x14FFFFFF),
+                                                RoundedCornerShape(50),
+                                            )
+                                            .clickable { viewModel.selectSeason(season.key) }
+                                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                                    )
+                                }
+                            }
+                        }
+                        // Select episodes → download (directive #5).
+                        if (selectionMode) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0x14FFFFFF))
+                                    .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.CheckCircle, null,
+                                    tint = theme.action,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    text = "${selectedEpisodes.size} selected",
+                                    style = WebTextStyles.sm,
+                                    color = theme.fg,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    text = "All",
+                                    style = WebTextStyles.xs, color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0x1FFFFFFF))
+                                        .clickable {
+                                            selectedEpisodes = visibleEpisodes.map { it.number }.toSet()
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                )
+                                Text(
+                                    text = "Download",
+                                    style = WebTextStyles.xs, color = theme.actionFg,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(theme.action)
+                                        .clickable(enabled = selectedEpisodes.isNotEmpty()) {
+                                            downloadEpisodes(context, viewModel, state, selectedEpisodes.toList())
+                                            selectionMode = false
+                                            selectedEpisodes = emptySet()
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                )
+                                Icon(
+                                    Icons.Default.Close, "Cancel selection",
+                                    tint = Color(0xFFD4D4D8),
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            selectionMode = false
+                                            selectedEpisodes = emptySet()
+                                        }
+                                        .padding(4.dp),
+                                )
+                            }
+                        } else if (state.slug != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0x0DFFFFFF))
+                                        .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(8.dp))
+                                        .clickable { selectionMode = true }
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.SelectAll, null,
+                                        tint = theme.fgMuted,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                    Text(
+                                        text = "Select episodes",
+                                        style = WebTextStyles.xs,
+                                        color = theme.fgMuted,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            items(visibleEpisodes, key = { it.number }) { ep ->
                 EpisodeRow(
                     ep = ep,
                     active = false,
+                    watched = (state.episodeProgress[ep.number] ?: 0f) >= 0.95f,
+                    progressFraction = state.episodeProgress[ep.number] ?: 0f,
+                    downloaded = state.downloadedEpisodes.contains(ep.number),
+                    selectionMode = selectionMode,
+                    selected = selectedEpisodes.contains(ep.number),
+                    onToggleSelect = {
+                        selectedEpisodes = if (selectedEpisodes.contains(ep.number)) {
+                            selectedEpisodes - ep.number
+                        } else selectedEpisodes + ep.number
+                    },
                     onClick = { onWatchClick(details.id, ep.number, state.slug) },
                 )
+            }
+            // Active download status lines (real engine states).
+            val active = downloadStates.filter { it.animeId == animeId }
+            if (active.isNotEmpty()) {
+                item(key = "download-status") {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        active.take(3).forEach { dl ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0x08FFFFFF))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.FileDownload, null,
+                                    tint = theme.action,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = "EP ${dl.episode} — " + when (dl.status) {
+                                        EpisodeDownloadEngine.Status.DOWNLOADING -> "downloading ${(dl.progress * 100).toInt()}%"
+                                        EpisodeDownloadEngine.Status.PAUSED -> "paused"
+                                        EpisodeDownloadEngine.Status.FAILED -> "failed"
+                                        EpisodeDownloadEngine.Status.RESOLVING -> "preparing…"
+                                        EpisodeDownloadEngine.Status.QUEUED -> "queued"
+                                        EpisodeDownloadEngine.Status.COMPLETED -> "downloaded"
+                                    },
+                                    style = WebTextStyles.xs,
+                                    color = theme.fg,
+                                )
+                            }
+                        }
+                        LaunchedEffect(active.size) { viewModel.refreshDownloads() }
+                    }
+                }
             }
         }
 
@@ -523,7 +742,7 @@ fun DetailsScreen(
                                                     Intent(
                                                         Intent.ACTION_VIEW,
                                                         Uri.parse("https://anilist.co/character/${c.id}"),
-                                                    )
+                                                    ),
                                                 )
                                             }
                                         },
@@ -592,11 +811,11 @@ fun DetailsScreen(
                 }
             }
         }
+
+        item(key = "bottom-space") { Spacer(Modifier.height(96.dp)) }
     }
 
-        // List / bookmark sheet — list sync needs an anikage.cc account
-        // (auth.anikage.cc); the button opens the site, exactly what the
-        // site does for signed-out users (login prompt). Honest, not fake.
+        // ── List sheet — local anime list (same store as the watch page) ──
         if (showListSheet) {
             androidx.compose.ui.window.Dialog(onDismissRequest = { showListSheet = false }) {
                 Column(
@@ -614,49 +833,91 @@ fun DetailsScreen(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "AniList / Anikage list syncing uses an anikage.cc account. " +
-                            "Open the site to manage your list — your watch progress saved " +
-                            "in this app stays on your device.",
-                        style = WebTextStyles.sm,
-                        color = Color(0xFFA1A1AA),
-                        lineHeight = 19.sp,
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "Open anikage.cc",
-                            style = WebTextStyles.sm,
-                            color = theme.actionFg,
-                            fontWeight = FontWeight.SemiBold,
+                    listOf(
+                        "watching" to "Watching",
+                        "planned" to "Plan to Watch",
+                        "completed" to "Completed",
+                        "on_hold" to "On Hold",
+                        "dropped" to "Dropped",
+                    ).forEach { (key, label) ->
+                        val selectedStatus = state.listStatus == key
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(theme.action)
+                                .background(if (selectedStatus) Color(0x14FFFFFF) else Color.Transparent)
                                 .clickable {
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse("https://anikage.cc/anime/info/${state.slug ?: details.id}")),
-                                        )
-                                    }
-                                    showListSheet = false
+                                    viewModel.setListStatus(if (selectedStatus) null else key)
                                 }
-                                .padding(horizontal = 16.dp, vertical = 9.dp),
-                        )
-                        Text(
-                            text = "Not now",
-                            style = WebTextStyles.sm,
-                            color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0x14FFFFFF))
-                                .clickable { showListSheet = false }
-                                .padding(horizontal = 16.dp, vertical = 9.dp),
-                        )
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = label,
+                                style = WebTextStyles.sm,
+                                color = if (selectedStatus) theme.action else Color.White,
+                                fontWeight = if (selectedStatus) FontWeight.SemiBold else FontWeight.Medium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (selectedStatus) {
+                                Icon(
+                                    Icons.Default.Check, null,
+                                    tint = theme.action,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
                     }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Done",
+                        style = WebTextStyles.sm,
+                        color = theme.actionFg,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(theme.action)
+                            .clickable { showListSheet = false }
+                            .padding(horizontal = 16.dp, vertical = 9.dp),
+                    )
                 }
             }
         }
+    }
+}
+
+/** Batch-download the selected episodes (real engine; skips existing). */
+private fun downloadEpisodes(
+    context: android.content.Context,
+    viewModel: DetailsViewModel,
+    state: DetailsUiState,
+    episodes: List<Int>,
+) {
+    val slug = state.slug ?: return
+    val details = state.details
+    val repo = AnikageRepository.get(context)
+    val height = SettingsState.downloadQualityHeight
+    kotlinx.coroutines.MainScope().launch {
+        val existing = repo.downloadedForAnime(state.details?.id ?: 0).map { it.episode }.toSet()
+        episodes.filter { it !in existing }.forEach { ep ->
+            EpisodeDownloadEngine.enqueue(
+                context,
+                EpisodeDownloadEngine.DownloadRequest(
+                    animeId = details?.id ?: 0,
+                    slug = slug,
+                    episode = ep,
+                    provider = com.anikage.app.Config.DEFAULT_STREAM_PROVIDER,
+                    lang = SettingsState.streamLang,
+                    height = height,
+                    titleRomaji = details?.title?.romaji,
+                    titleEnglish = details?.title?.english,
+                    episodeTitle = state.episodes.firstOrNull { it.number == ep }?.title,
+                    posterUrl = details?.coverImage?.best(),
+                ),
+            )
+        }
+        viewModel.refreshDownloads()
     }
 }
 
@@ -691,20 +952,60 @@ private fun DetailChip(
     }
 }
 
+/** One cell of the info grid (label over value). */
 @Composable
-private fun Pill(text: String, bold: Boolean = false, muted: Boolean = false) {
+private fun InfoCell(label: String, value: String) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    ) {
+        Text(
+            text = value,
+            style = WebTextStyles.sm,
+            color = Color(0xE6FFFFFF),
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = label.uppercase(),
+            style = WebTextStyles.xs2,
+            color = Color(0x59FFFFFF),
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.sp,
+        )
+    }
+}
+
+/** Round action with an active accent state (subscribe / list). */
+@Composable
+private fun RoundStateAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    active: Boolean,
+    description: String,
+    onClick: () -> Unit,
+) {
     val theme = LocalAnikageTheme.current
-    Text(
-        text = text,
-        style = WebTextStyles.xs,
-        color = if (muted) Color(0xB3FFFFFF) else Color(0xCCFFFFFF),
-        fontWeight = if (bold) FontWeight.Medium else FontWeight.Medium,
+    Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color(0x0DFFFFFF))
-            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(50))
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-    )
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (active) theme.action.copy(alpha = 0.18f) else Color(0x1AFFFFFF))
+            .border(
+                1.dp,
+                if (active) theme.action.copy(alpha = 0.55f) else Color(0x26FFFFFF),
+                CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = description,
+            tint = if (active) theme.action else Color(0xB3FFFFFF),
+            modifier = Modifier.size(16.dp),
+        )
+    }
 }
 
 /** Site: round icon button — size-9 rounded-full border-white/15 bg-white/10. */
@@ -728,6 +1029,12 @@ private fun RoundAction(icon: androidx.compose.ui.graphics.vector.ImageVector, o
 private fun EpisodeRow(
     ep: EpisodeUi,
     active: Boolean,
+    watched: Boolean,
+    progressFraction: Float,
+    downloaded: Boolean,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onToggleSelect: () -> Unit,
     onClick: () -> Unit,
 ) {
     val theme = LocalAnikageTheme.current
@@ -736,16 +1043,50 @@ private fun EpisodeRow(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (active) Color(0x14FFFFFF) else Color.Transparent)
+            .background(
+                when {
+                    selected -> theme.action.copy(alpha = 0.18f)
+                    active -> Color(0x14FFFFFF)
+                    else -> Color.Transparent
+                },
+            )
             .border(
                 1.dp,
-                if (active) theme.accent else Color.Transparent,
+                when {
+                    selected -> theme.action.copy(alpha = 0.55f)
+                    active -> theme.accent
+                    else -> Color.Transparent
+                },
                 RoundedCornerShape(12.dp),
             )
             .clickable(onClick = onClick)
             .padding(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (selectionMode) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(if (selected) theme.action else Color(0x0DFFFFFF))
+                    .border(
+                        1.dp,
+                        if (selected) theme.action else Color(0x26FFFFFF),
+                        CircleShape,
+                    )
+                    .clickable(onClick = onToggleSelect),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (selected) {
+                    Icon(
+                        Icons.Default.Check, "Selected",
+                        tint = theme.actionFg,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+        }
         // Thumbnail — site: aspect-video h-19 (76px) rounded-xl.
         Box(
             modifier = Modifier
@@ -754,13 +1095,29 @@ private fun EpisodeRow(
                 .clip(RoundedCornerShape(12.dp))
                 .background(theme.surfaceElevated),
         ) {
-            ep.thumbnail?.let { thumb ->
-                AsyncImage(
-                    model = thumb,
-                    contentDescription = "Episode ${ep.number}",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            if (SettingsState.episodeThumbnails) {
+                ep.thumbnail?.let { thumb ->
+                    AsyncImage(
+                        model = thumb,
+                        contentDescription = "Episode ${ep.number}",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            if (watched) {
+                Box(Modifier.fillMaxSize().background(Color(0x66000000)))
+                if (!selectionMode) {
+                    Icon(
+                        Icons.Default.Check, "Watched",
+                        tint = Color(0xFF34D399),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(28.dp)
+                            .background(Color(0x8C000000), CircleShape)
+                            .padding(5.dp),
+                    )
+                }
             }
             // EP badge — site: absolute bottom-1.5 left-1.5 rounded-md bg-surface/85.
             Text(
@@ -775,6 +1132,33 @@ private fun EpisodeRow(
                     .background(theme.surface.copy(alpha = 0.85f))
                     .padding(horizontal = 6.dp, vertical = 3.dp),
             )
+            if (downloaded) {
+                Icon(
+                    Icons.Default.DownloadDone, "Downloaded",
+                    tint = Color(0xFF34D399),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(18.dp),
+                )
+            }
+            // Watch progress bar.
+            if (progressFraction in 0.01f..0.94f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(Color(0x33FFFFFF)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progressFraction)
+                            .fillMaxSize()
+                            .background(Color(0xFF34D399)),
+                    )
+                }
+            }
         }
 
         Column(
@@ -783,6 +1167,52 @@ private fun EpisodeRow(
                 .padding(start = 12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = ep.number.toString(),
+                    style = WebTextStyles.sm,
+                    color = theme.fg,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (ep.isFiller) {
+                    Text(
+                        text = "FILLER",
+                        style = WebTextStyles.xs2,
+                        color = Color(0xFFFDBA74),
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x1AFB923C))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                } else if (ep.isRecap) {
+                    Text(
+                        text = "RECAP",
+                        style = WebTextStyles.xs2,
+                        color = theme.fgMuted,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x14FFFFFF))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+                if (downloaded) {
+                    Text(
+                        text = "OFFLINE",
+                        style = WebTextStyles.xs2,
+                        color = Color(0xFF6EE7B7),
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x1A34D399))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+            }
             Text(
                 text = ep.title,
                 style = WebTextStyles.sm,
@@ -799,7 +1229,7 @@ private fun EpisodeRow(
                 )
             } else if (ep.isFiller) {
                 Text(
-                    text = "Filler",
+                    text = "Filler episode",
                     style = WebTextStyles.xs,
                     color = Color(0xFFFB923C),
                 )

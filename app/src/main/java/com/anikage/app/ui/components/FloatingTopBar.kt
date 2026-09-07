@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -41,14 +42,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.anikage.app.R
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import com.anikage.app.core.auth.AuthManager
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 
@@ -236,6 +241,14 @@ private fun ProfileAvatarMenu(onNavigate: (String) -> Unit) {
     val theme = LocalAnikageTheme.current
     var expanded by remember { mutableStateOf(false) }
 
+    // v2.2.0 (directive #17): the avatar shows the SIGNED-IN user's real
+    // profile picture (from auth.anikage.cc), updating automatically after
+    // login/logout. Falls back to the default asset when logged out, and to
+    // the initial-letter tile when the avatar fails to load.
+    val user = AuthManager.user
+    var avatarFailed by remember { mutableStateOf(false) }
+    val avatarUrl = user?.avatarUrl()
+
     Box {
         Box(
             modifier = Modifier
@@ -247,13 +260,38 @@ private fun ProfileAvatarMenu(onNavigate: (String) -> Unit) {
                 .clickable { expanded = true },
             contentAlignment = Alignment.Center,
         ) {
-            // Site's exact default avatar asset (logged-out).
-            Image(
-                painter = painterResource(id = R.drawable.nav_default_avatar),
-                contentDescription = "Profile menu",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(size),
-            )
+            if (avatarUrl != null && !avatarFailed) {
+                coil.compose.AsyncImage(
+                    model = avatarUrl,
+                    contentDescription = "Profile menu — ${user?.displayLabel ?: "account"}",
+                    contentScale = ContentScale.Crop,
+                    onError = { avatarFailed = true },
+                    modifier = Modifier.size(size),
+                )
+            } else if (user != null) {
+                // Signed in but no avatar image: initial-letter tile.
+                Box(
+                    modifier = Modifier
+                        .size(size)
+                        .background(theme.action, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = user.displayLabel.firstOrNull()?.uppercase() ?: "?",
+                        style = WebTextStyles.titleSection,
+                        color = theme.actionFg,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            } else {
+                // Site's exact default avatar asset (logged-out).
+                Image(
+                    painter = painterResource(id = R.drawable.nav_default_avatar),
+                    contentDescription = "Profile menu",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(size),
+                )
+            }
         }
 
         if (expanded) {
@@ -295,7 +333,9 @@ private fun ProfileDropdown(
             .background(Color(0xF20A0A0A))                        // surface/95 + blur
             .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(16.dp)),
     ) {
-        // Guest header — avatar + status.
+        // Header — the REAL signed-in account (directive #17/#18) or guest.
+        val context = LocalContext.current
+        val user = AuthManager.user
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -303,32 +343,88 @@ private fun ProfileDropdown(
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 14.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x14FFFFFF)),
-                contentAlignment = Alignment.Center,
-            ) {
+            if (user != null) {
+                val url = user.avatarUrl()
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(theme.action),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (url != null) {
+                        coil.compose.AsyncImage(
+                            model = url,
+                            contentDescription = user.displayLabel,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Text(
+                            text = user.displayLabel.firstOrNull()?.uppercase() ?: "?",
+                            style = WebTextStyles.sm,
+                            color = theme.actionFg,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = user.displayLabel,
+                        style = WebTextStyles.sm,
+                        color = theme.fg,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Signed in · anikage.cc",
+                        style = WebTextStyles.xs,
+                        color = theme.fgMuted,
+                    )
+                }
+                // Sign out (real session teardown).
                 Icon(
-                    Icons.Outlined.Person,
-                    contentDescription = null,
-                    tint = theme.fgMuted,
-                    modifier = Modifier.size(18.dp),
+                    Icons.AutoMirrored.Outlined.Logout,
+                    contentDescription = "Sign out",
+                    tint = Color(0xFFFCA5A5),
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            AuthManager.signOut(context)
+                            onDismiss()
+                        }
+                        .padding(6.dp),
                 )
-            }
-            Column {
-                Text(
-                    text = "Guest",
-                    style = WebTextStyles.sm,
-                    color = theme.fg,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = "Not signed in",
-                    style = WebTextStyles.xs,
-                    color = theme.fgMuted,
-                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x14FFFFFF)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.Person,
+                        contentDescription = null,
+                        tint = theme.fgMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                Column {
+                    Text(
+                        text = "Guest",
+                        style = WebTextStyles.sm,
+                        color = theme.fg,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Sign in to post comments",
+                        style = WebTextStyles.xs,
+                        color = theme.fgMuted,
+                    )
+                }
             }
         }
         Box(
@@ -372,11 +468,11 @@ private fun ProfileDropdown(
 
 private data class NavTab(val route: String, val label: String)
 
-/** Site link order: Home, Browse, Schedule, Music, Torrents. */
+/** v2.2.0: Torrents removed; Subscriptions is the fifth tab (directive #10/#13). */
 private fun navItems(): List<NavTab> = listOf(
     NavTab("home", "Home"),
     NavTab("browse", "Browse"),
     NavTab("schedule", "Schedule"),
     NavTab("music", "Music"),
-    NavTab("torrents", "Torrents"),
+    NavTab("subscriptions", "Subscriptions"),
 )

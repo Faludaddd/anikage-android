@@ -25,6 +25,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Restore the persisted website theme (like the site's localStorage).
         ThemeState.init(this)
+        // Restore the Anikage account session (real auth.anikage.cc login)
+        // and schedule the subscription new-episode checks.
+        com.anikage.app.core.auth.AuthManager.init(this)
+        com.anikage.app.core.data.SubscriptionWorker.ensure(this)
+        // Subscription notification deep link: open the anime's watch screen.
+        handleDeepLink(intent)
         AppLogger.d(LogCategory.UI, "MainActivity.onCreate")
 
         setContent {
@@ -50,6 +56,23 @@ class MainActivity : ComponentActivity() {
         // Session heartbeat keeps duration/status metadata fresh on disk.
         AppLogger.heartbeat()
         AppLogger.d(LogCategory.UI, "MainActivity.onResume")
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        // Notification taps while the activity is alive (singleTop).
+        handleDeepLink(intent)
+    }
+
+    /** Subscription-notification deep link: watch {animeId} at {episode}. */
+    private fun handleDeepLink(intent: android.content.Intent?) {
+        val animeId = intent?.getIntExtra("anikage.open.animeId", -1) ?: -1
+        if (animeId > 0 && intent != null) {
+            val episode = intent.getIntExtra("anikage.open.episode", 0)
+            com.anikage.app.core.nav.PendingNavigation.request(
+                com.anikage.app.core.nav.PendingNavigation.WatchTarget(animeId, episode),
+            )
+        }
     }
 
     override fun onDestroy() {

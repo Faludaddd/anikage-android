@@ -15,8 +15,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         WatchProgressEntity::class,
         DownloadedEpisodeEntity::class,
         AnimeListEntity::class,
+        SubscriptionEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AnikageDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class AnikageDatabase : RoomDatabase() {
     abstract fun watchProgressDao(): WatchProgressDao
     abstract fun downloadedEpisodeDao(): DownloadedEpisodeDao
     abstract fun animeListDao(): AnimeListDao
+    abstract fun subscriptionDao(): SubscriptionDao
 
     companion object {
         @Volatile private var INSTANCE: AnikageDatabase? = null
@@ -58,6 +60,23 @@ abstract class AnikageDatabase : RoomDatabase() {
             }
         }
 
+        /** v2 -> v3: subscriptions (new-episode notifications). Additive. */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `subscriptions` (" +
+                        "`animeId` INTEGER NOT NULL, `slug` TEXT, " +
+                        "`titleRomaji` TEXT, `titleEnglish` TEXT, `posterUrl` TEXT, " +
+                        "`coverColor` TEXT, `releaseStatus` TEXT, " +
+                        "`lastKnownEpisodes` INTEGER NOT NULL, " +
+                        "`lastNotifiedEpisode` INTEGER NOT NULL, " +
+                        "`nextAiringEpisode` INTEGER, `subscribedAt` INTEGER NOT NULL, " +
+                        "`lastCheckedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`animeId`))",
+                )
+            }
+        }
+
         fun get(context: Context): AnikageDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -65,7 +84,7 @@ abstract class AnikageDatabase : RoomDatabase() {
                     AnikageDatabase::class.java,
                     "anikage.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

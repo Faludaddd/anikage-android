@@ -18,6 +18,7 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.text.CueGroup
 import androidx.media3.exoplayer.ExoPlayer
 import com.anikage.app.Config
+import com.anikage.app.core.auth.AuthManager
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.api.AnikageComment
 import com.anikage.app.core.data.api.AnikageServer
@@ -26,6 +27,7 @@ import com.anikage.app.core.data.model.AnimeDetails
 import com.anikage.app.core.download.EpisodeDownloadEngine
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
+import com.anikage.app.core.media.LiveCaptionsEngine
 import com.anikage.app.core.media.PlayerFactory
 import com.anikage.app.core.settings.SettingsState
 import java.io.File
@@ -45,6 +47,17 @@ data class EpisodeItem(
     val thumbnail: String? = null,
     val isFiller: Boolean = false,
     val isRecap: Boolean = false,
+    /** Season grouping (the episodes API returns season metadata). */
+    val seasonNumber: Int? = null,
+    val seasonName: String? = null,
+    val episodeInSeason: Int? = null,
+)
+
+/** One selectable season in the episode list (quick season switching). */
+data class SeasonGroup(
+    val key: Int,                 // seasonNumber (or 0 = unseasoned)
+    val label: String,            // "Season 1" / "Specials" …
+    val episodes: List<EpisodeItem>,
 )
 
 /** Per-episode watch progress for the episode list (watched state + bar). */
@@ -72,14 +85,10 @@ data class StreamServer(
     val supportsSub: Boolean,
     val supportsDub: Boolean,
     val isDefault: Boolean,
-)
-
-/** An E-server (embed) chip — WebView players from the sources endpoint. */
-data class EmbedServer(
-    val key: String,
-    val label: String,
-    val url: String? = null,
-)
+) {
+    /** Live health observed during this session: null = unknown, true = ok, false = failed. */
+    var healthy: Boolean? = null
+}
 
 /** One selectable video quality (HLS rendition). */
 data class QualityOption(
@@ -115,6 +124,10 @@ data class CommentsUiState(
     val loading: Boolean = false,
     val comments: List<AnikageComment> = emptyList(),
     val total: Int = 0,
+    val posting: Boolean = false,
+    val postError: String? = null,
+    /** Brief confirmation after a successful post. */
+    val justPosted: Boolean = false,
 )
 
 data class WatchUiState(
@@ -141,12 +154,6 @@ data class WatchUiState(
     val streamLang: String = Config.DEFAULT_STREAM_LANG,
     val streamServer: String = Config.DEFAULT_STREAM_PROVIDER,
     val servers: List<StreamServer> = emptyList(),
-    /** E-server chips (site: E-Koto / E-Neko …) + embed mode. */
-    val embedServers: List<EmbedServer> = emptyList(),
-    val embedActive: EmbedServer? = null,
-    val embedUrl: String? = null,
-    val embedLoading: Boolean = false,
-    val embedError: String? = null,
     // ── live player state (ticked by the position ticker / listener) ─────
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
@@ -177,6 +184,11 @@ data class WatchUiState(
     val episodeProgress: Map<Int, EpisodeProgress> = emptyMap(),
     /** Local anime list status for this anime (null = not in list). */
     val listStatus: String? = null,
+    /** Subscription state for this anime (user directive #12). */
+    val subscribed: Boolean = false,
+    // ── seasons (quick season switching, user directive #6) ───────────────
+    val seasons: List<SeasonGroup> = emptyList(),
+    val selectedSeason: Int = -1,
     // ── offline / downloaded playback ─────────────────────────────────────
     /** Non-null when the player is playing a downloaded file (offline mode). */
     val localFile: String? = null,
@@ -190,6 +202,12 @@ data class WatchUiState(
     val nextUp: NextUpState? = null,
     /** Fillers skipped on the way to the current episode (toast info). */
     val skippedFillerNotice: String? = null,
+    // ── live captions (user directive #15) ────────────────────────────────
+    val liveCaptionsActive: Boolean = false,
+    val liveCaptionText: String? = null,
+    val liveCaptionsError: String? = null,
+    // ── sleep timer (user directive #16) ──────────────────────────────────
+    val sleepTimerSec: Int = 0,
 ) {
     /** Servers that can serve the current SUB/DUB selection. */
     val availableServers: List<StreamServer>
@@ -207,6 +225,10 @@ data class WatchUiState(
 
     /** Playing a downloaded copy right now (offline mode). */
     val playingDownloaded: Boolean get() = localFile != null
+
+    /** Episodes of the selected season (all episodes when no seasons). */
+    val seasonEpisodes: List<EpisodeItem>
+        get() = seasons.firstOrNull { it.key == selectedSeason }?.episodes ?: episodes
 }
 
 /**
@@ -217,19 +239,25 @@ data class WatchUiState(
  *      carried-in Anikage slug from the originating screen.
  *   2. slug — used directly when known; resolved by title-search only as a
  *      fallback.
- *   3. episodes -> {slug}/episodes (titles/thumbs/filler).
- *   4. servers -> {slug}/episodes/{n}/servers (koto/kiwi/neko/zen + embeds).
+ *   3. episodes -> {slug}/episodes (titles/thumbs/filler/seasons).
+ *   4. servers -> {slug}/episodes/{n}/servers (real provider list).
  *   5. sources -> {slug}/episodes/{n}/sources?provider&lang -> HLS tokens,
- *      subtitles, intro/outro skip times, embed options.
+ *      subtitles, intro/outro skip times.
  *   6. token -> {PROXY}/m3u8/{token}, played through [PlayerFactory]'s
  *      OkHttp transport (guaranteed Origin/Referer headers + LRU cache).
  *
- * VIDEO SURFACE (the black-video-with-audio fix): the TextureView composable
- * can attach BEFORE the player exists (player is built lazily when the first
- * stream resolves) — `player()` therefore attaches the stored view when the
- * player is created, and [attachSurface]/[detachSurface] are identity-guarded
- * so the fullscreen swap (dispose old view -> compose new view) can never
- * clear a NEWER attachment with the OLD view's release callback.
+ * v2.2.0 additions:
+ *  - QUALITY PERSISTS (directive #4): every quality pick saves to Settings;
+ *    each prepared stream re-applies it and falls back to the closest
+ *    available rendition when the exact one is missing.
+ *  - SEASONS (directive #6): episodes group by the API's season metadata.
+ *  - BATCH DOWNLOADS (directive #5): enqueue a whole season / selection.
+ *  - REAL COMMENTS (directive #8): posting through auth.anikage.cc with the
+ *    signed-in session; login state drives the composer.
+ *  - LIVE CAPTIONS (directive #15): on-device speech recognition engine.
+ *  - SLEEP TIMER (directive #16) + SUBSCRIPTION toggle (directive #12).
+ *  - E-SERVERS REMOVED (directive #7): servers come from the site's own
+ *    servers endpoint only, with observed per-server health.
  */
 @OptIn(androidx.media3.common.util.UnstableApi::class)
 class WatchViewModel(
@@ -276,6 +304,12 @@ class WatchViewModel(
 
     /** Guards the "no video track" check to run once per prepared item. */
     private var checkedVideoTrackForItem = false
+
+    /** Guards applying the persisted quality once per prepared item. */
+    private var appliedPersistedQuality = false
+
+    /** Sleep-timer job (pauses playback at 0). */
+    private var sleepJob: Job? = null
 
     /**
      * The player — built ONCE via [PlayerFactory] (OkHttp transport with the
@@ -345,6 +379,7 @@ class WatchViewModel(
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
             refreshTrackMenus(tracks)
+            applyPersistedQualityIfNeeded()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -359,6 +394,7 @@ class WatchViewModel(
                 error,
             )
             cancelNextUp()
+            markServerHealth(_state.value.streamServer, false)
             maybeAutoFallback(error, gen, friendly)
         }
     }
@@ -374,7 +410,7 @@ class WatchViewModel(
         if (checkedVideoTrackForItem) return
         checkedVideoTrackForItem = true
         val p = player ?: return
-        if (_state.value.embedActive != null || _state.value.localFile != null) return
+        if (_state.value.localFile != null) return
         val hasSelectedVideo = p.currentTracks.groups.any { g ->
             g.type == C.TRACK_TYPE_VIDEO && (0 until g.length).any { g.isTrackSelected(it) }
         }
@@ -410,6 +446,9 @@ class WatchViewModel(
             _state.value.episode + 1,
             forceSkipFiller = SettingsState.autoSkipFiller,
         ) ?: return
+        // Auto-download next episode (user directive #5): when enabled and
+        // the just-finished episode was downloaded, queue the next one.
+        maybeAutoDownloadNext(_state.value.episode, next)
         val countdown = SettingsState.autonextCountdownSec.coerceIn(0, 30)
         if (countdown <= 0) {
             switchEpisode(next)
@@ -425,6 +464,37 @@ class WatchViewModel(
                 )
             }
             startTicker()
+        }
+    }
+
+    /** Auto-download next episode after finishing a downloaded episode. */
+    private fun maybeAutoDownloadNext(finishedEpisode: Int, nextEpisode: Int) {
+        if (!SettingsState.autoDownloadNextEpisode) return
+        val slug = _state.value.slug ?: return
+        viewModelScope.launch {
+            val finishedDownload = repo.downloadedEpisode(animeId, finishedEpisode)
+            if (finishedDownload != null) {
+                val alreadyNext = repo.downloadedEpisode(animeId, nextEpisode)
+                if (alreadyNext == null) {
+                    val d = _state.value.details
+                    AppLogger.i(LogCategory.DATA, "Auto-download next: episode $nextEpisode")
+                    EpisodeDownloadEngine.enqueue(
+                        app,
+                        EpisodeDownloadEngine.DownloadRequest(
+                            animeId = animeId,
+                            slug = slug,
+                            episode = nextEpisode,
+                            provider = _state.value.streamServer,
+                            lang = _state.value.streamLang,
+                            height = finishedDownload.height,
+                            titleRomaji = d?.title?.romaji,
+                            titleEnglish = d?.title?.english,
+                            episodeTitle = _state.value.episodes.firstOrNull { it.number == nextEpisode }?.title,
+                            posterUrl = d?.coverImage?.best(),
+                        ),
+                    )
+                }
+            }
         }
     }
 
@@ -448,7 +518,6 @@ class WatchViewModel(
      */
     /** Returns true when a fallback reload was started (caller should bail). */
     private fun maybeAutoFallback(error: PlaybackException?, gen: Int, friendly: String?): Boolean {
-        if (_state.value.embedActive != null) return false
         if (_state.value.localFile != null) return false
         if (episodeGen.get() != gen) return false // stale error from a previous load
 
@@ -505,6 +574,18 @@ class WatchViewModel(
             .filter { if (lang == "dub") it.supportsDub else it.supportsSub }
             .map { it.name }
             .firstOrNull { it.lowercase() !in failedProviders }
+    }
+
+    /** Record observed server health (drives the status dot in the chips). */
+    private fun markServerHealth(name: String, healthy: Boolean) {
+        val servers = _state.value.servers.toMutableList()
+        val idx = servers.indexOfFirst {
+            it.name.equals(name, ignoreCase = true) || it.id.equals(name, ignoreCase = true)
+        }
+        if (idx >= 0) {
+            servers[idx] = servers[idx].also { it.healthy = healthy }
+            _state.value = _state.value.copy(servers = servers)
+        }
     }
 
     private fun buildPlayer(): ExoPlayer = PlayerFactory.build(app)
@@ -631,18 +712,74 @@ class WatchViewModel(
 
     fun toggleMuted() = setMuted(!_state.value.muted)
 
-    /** Select a specific HLS rendition; null = Auto. */
+    // -----------------------------------------------------------------------
+    //  QUALITY — persisted preference (user directive #4)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Select a specific HLS rendition; null = Auto. The pick is PERSISTED
+     * (Settings) and re-applied on every episode/anime/restart; when the
+     * exact rendition is missing from a source, the closest available one
+     * is chosen instead (never breaks playback).
+     */
     fun selectQuality(option: QualityOption?) {
         val p = player() ?: return
         val params = p.trackSelectionParameters.buildUpon()
         if (option == null || option.trackIndex < 0) {
             params.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            SettingsState.setPreferredQualityHeight(app, 0)
         } else {
             val group = p.currentTracks.groups.getOrNull(option.groupIndex) ?: return
             params.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
             params.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
+            SettingsState.setPreferredQualityHeight(app, option.height)
+            AppLogger.d(LogCategory.PLAYER, "Quality pinned to ${option.label} (persisted)")
         }
         p.trackSelectionParameters = params.build()
+        appliedPersistedQuality = true // user's explicit pick already applied
+        refreshTrackMenus(p.currentTracks)
+    }
+
+    /**
+     * Apply the PERSISTED quality to a freshly prepared stream. Called from
+     * onTracksChanged (once per item): picks the rendition closest to the
+     * preference (largest height <= preferred; when none fit, the smallest
+     * above it) and pins it — graceful fallback, never a break.
+     */
+    private fun applyPersistedQualityIfNeeded() {
+        if (appliedPersistedQuality) return
+        val p = player ?: return
+        val preferred = SettingsState.preferredQualityHeight
+        if (preferred <= 0) { appliedPersistedQuality = true; return }
+        appliedPersistedQuality = true
+
+        val videoGroupIndex = p.currentTracks.groups.indexOfFirst {
+            it.type == C.TRACK_TYPE_VIDEO && it.length > 0
+        }
+        if (videoGroupIndex < 0) return
+        val vg = p.currentTracks.groups[videoGroupIndex]
+        data class Rendition(val trackIndex: Int, val height: Int)
+        val renditions = (0 until vg.length)
+            .filter { vg.isTrackSupported(it) }
+            .map { Rendition(it, vg.getTrackFormat(it).height) }
+            .filter { it.height > 0 }
+        if (renditions.isEmpty()) return
+        val pick = renditions
+            .filter { it.height <= preferred }
+            .maxByOrNull { it.height }
+            ?: renditions.minByOrNull { it.height }
+            ?: return
+        val params = p.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            .setOverrideForType(TrackSelectionOverride(vg.mediaTrackGroup, pick.trackIndex))
+            .build()
+        p.trackSelectionParameters = params
+        val exact = pick.height == preferred
+        AppLogger.d(
+            LogCategory.PLAYER,
+            "Restored persisted quality ${preferred}p -> ${pick.height}p" +
+                if (exact) "" else " (closest available)",
+        )
         refreshTrackMenus(p.currentTracks)
     }
 
@@ -784,6 +921,90 @@ class WatchViewModel(
     }
 
     // -----------------------------------------------------------------------
+    //  Live captions (user directive #15) — on-device speech recognition
+    // -----------------------------------------------------------------------
+
+    /** True when the device can do speech recognition at all. */
+    fun liveCaptionsSupported(): Boolean = LiveCaptionsEngine.isSupported(app)
+
+    fun liveCaptionsError(): String? = LiveCaptionsEngine.lastError
+
+    /** Start live captions; the UI must pass RECORD_AUDIO permission state. */
+    fun startLiveCaptions() {
+        if (!liveCaptionsSupported()) {
+            updateState {
+                copy(liveCaptionsError = "This device has no speech recognition service, so live captions aren't available.")
+            }
+            return
+        }
+        LiveCaptionsEngine.start(app, SettingsState.liveCaptionsLanguage) { caption ->
+            updateState {
+                copy(
+                    liveCaptionsActive = true,
+                    liveCaptionText = caption.text,
+                    liveCaptionsError = null,
+                )
+            }
+        }
+        updateState {
+            copy(
+                liveCaptionsActive = LiveCaptionsEngine.active,
+                liveCaptionsError = LiveCaptionsEngine.lastError,
+            )
+        }
+        if (LiveCaptionsEngine.active) {
+            AppLogger.i(LogCategory.PLAYER, "Live captions ON (on-device speech recognition)")
+        }
+    }
+
+    fun stopLiveCaptions() {
+        LiveCaptionsEngine.stop()
+        updateState { copy(liveCaptionsActive = false, liveCaptionText = null) }
+        AppLogger.i(LogCategory.PLAYER, "Live captions OFF")
+    }
+
+    fun toggleLiveCaptions() {
+        if (_state.value.liveCaptionsActive) stopLiveCaptions() else startLiveCaptions()
+    }
+
+    /** Live captions couldn't start: the mic permission was declined. */
+    fun reportLiveCaptionPermissionDenied() {
+        updateState {
+            copy(liveCaptionsError = "Microphone permission is needed for live captions — enable it and try again.")
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    //  Sleep timer (user directive #16)
+    // -----------------------------------------------------------------------
+
+    /** Start a sleep timer in whole minutes (0 cancels). Pauses at zero. */
+    fun setSleepTimer(minutes: Int) {
+        sleepJob?.cancel()
+        if (minutes <= 0) {
+            updateState { copy(sleepTimerSec = 0) }
+            return
+        }
+        var remaining = minutes * 60
+        updateState { copy(sleepTimerSec = remaining) }
+        sleepJob = viewModelScope.launch {
+            while (isActive && remaining > 0) {
+                delay(1000)
+                remaining--
+                if (remaining % 15 == 0 || remaining <= 5 || remaining == 60) {
+                    updateState { copy(sleepTimerSec = remaining) }
+                }
+            }
+            if (remaining <= 0) {
+                pause()
+                updateState { copy(sleepTimerSec = 0) }
+                AppLogger.i(LogCategory.PLAYER, "Sleep timer elapsed — playback paused")
+            }
+        }
+        AppLogger.i(LogCategory.PLAYER, "Sleep timer set: $minutes min")
+    }
+
+    // -----------------------------------------------------------------------
     //  Data pipeline
     // -----------------------------------------------------------------------
 
@@ -832,22 +1053,29 @@ class WatchViewModel(
                             repo.anikageEpisodes(slug).onSuccess { eps ->
                                 if (eps.isNotEmpty()) {
                                     val distinct = eps.distinctBy { it.number }
+                                    val items = distinct.map {
+                                        EpisodeItem(
+                                            number = it.number,
+                                            title = it.title?.takeIf { t -> t.isNotBlank() } ?: "Episode ${it.number}",
+                                            thumbnail = it.image,
+                                            isFiller = it.isFiller,
+                                            isRecap = it.isRecap,
+                                            seasonNumber = it.seasonNumber,
+                                            seasonName = it.seasonName,
+                                            episodeInSeason = it.episodeInSeason,
+                                        )
+                                    }
                                     _state.value = _state.value.copy(
-                                        episodes = distinct.map {
-                                            EpisodeItem(
-                                                number = it.number,
-                                                title = it.title?.takeIf { t -> t.isNotBlank() } ?: "Episode ${it.number}",
-                                                thumbnail = it.image,
-                                                isFiller = it.isFiller,
-                                                isRecap = it.isRecap,
-                                            )
-                                        },
+                                        episodes = items,
                                         totalEpisodes = distinct.size,
+                                        seasons = buildSeasonGroups(items),
+                                        selectedSeason = seasonOf(items, ep),
                                     )
                                     AppLogger.i(
                                         LogCategory.PLAYER,
                                         "Loaded '${details.displayTitle()}' — ${distinct.size} episodes listed " +
-                                            "(metadata says ${details.episodes ?: "?"})",
+                                            "(metadata says ${details.episodes ?: "?"})" +
+                                            if (_state.value.seasons.size > 1) " across ${_state.value.seasons.size} seasons" else "",
                                     )
                                     // Auto-skip filler on arrival: when the
                                     // session auto-resumed INTO a filler and
@@ -877,11 +1105,17 @@ class WatchViewModel(
                     }
                     // Per-episode watch progress for the episode list UI.
                     launch { loadEpisodeProgress() }
-                    // Local anime list status.
+                    // Local anime list status + subscription state.
                     launch {
                         val status = repo.getListStatus(animeId)
                         if (_state.value.listStatus != status) {
                             _state.value = _state.value.copy(listStatus = status)
+                        }
+                    }
+                    launch {
+                        val sub = repo.getSubscription(animeId)
+                        if (_state.value.subscribed != (sub != null)) {
+                            _state.value = _state.value.copy(subscribed = sub != null)
                         }
                     }
                     if (initialLocalFile != null && File(initialLocalFile).exists()) {
@@ -905,6 +1139,45 @@ class WatchViewModel(
                     }
                 },
             )
+        }
+    }
+
+    /** Group episodes into seasons (directive #6). Single-season anime -> []. */
+    private fun buildSeasonGroups(episodes: List<EpisodeItem>): List<SeasonGroup> {
+        val seasoned = episodes.filter { (it.seasonNumber ?: 0) > 0 }
+        if (seasoned.size < episodes.size / 2 || seasoned.distinctBy { it.seasonNumber }.size < 2) {
+            // Not real multi-season data (most catalogs): no selector.
+            return if (seasoned.distinctBy { it.seasonNumber }.size > 1) seasoned.groupBy { it.seasonNumber!! }
+                .toSortedMap()
+                .map { (num, eps) -> SeasonGroup(num, seasonLabel(num, eps.firstOrNull()?.seasonName), eps.sortedBy { it.number }) }
+            else emptyList()
+        }
+        return episodes.groupBy { it.seasonNumber ?: 0 }
+            .toSortedMap()
+            .map { (num, eps) ->
+                SeasonGroup(num, seasonLabel(num, eps.firstOrNull()?.seasonName), eps.sortedBy { it.number })
+            }
+    }
+
+    private fun seasonLabel(number: Int, name: String?): String {
+        val explicit = name?.takeIf { it.isNotBlank() }
+        return when {
+            explicit != null -> explicit.replaceFirstChar { it.uppercase() }
+            number == 0 -> "Episodes"
+            else -> "Season $number"
+        }
+    }
+
+    /** The season group containing [episode]. */
+    private fun seasonOf(episodes: List<EpisodeItem>, episode: Int): Int {
+        val seasoned = episodes.firstOrNull { it.number == episode }?.seasonNumber
+        return seasoned ?: episodes.firstOrNull { (it.seasonNumber ?: 0) > 0 }?.seasonNumber ?: -1
+    }
+
+    /** Switch the visible season (directive #6) — stays on the same page. */
+    fun selectSeason(key: Int) {
+        if (_state.value.seasons.any { it.key == key }) {
+            updateState { copy(selectedSeason = key) }
         }
     }
 
@@ -941,6 +1214,7 @@ class WatchViewModel(
         val gen = episodeGen.incrementAndGet()
         episodeJob?.cancel()
         checkedVideoTrackForItem = false
+        appliedPersistedQuality = false
         cancelNextUp()
         episodeJob = viewModelScope.launch {
             if (!isActive) return@launch
@@ -959,39 +1233,11 @@ class WatchViewModel(
             val slug = _state.value.slug
             val lang = _state.value.streamLang
             val server = _state.value.streamServer
-            val activeEmbed = _state.value.embedActive
             var streamUrl: String? = null
             var subtitles: List<SubtitleTrack> = emptyList()
             var failure: String? = null
 
-            if (activeEmbed != null) {
-                // E-server mode: resolve the embed URL for this episode.
-                _state.value = _state.value.copy(embedLoading = true, embedError = null)
-                if (slug == null) {
-                    _state.value = _state.value.copy(embedLoading = false, embedError = "No Anikage slug for this anime.")
-                } else {
-                    repo.anikageEmbedSources(slug, episode, activeEmbed.key, lang)
-                        .onSuccess { response ->
-                            val url = response.embedOptions.firstOrNull { it.key == activeEmbed.key && it.url != null }?.url
-                                ?: response.embeds.firstOrNull { it.status == "ok" }?.url
-                            if (url != null) {
-                                _state.value = _state.value.copy(embedUrl = url, embedLoading = false)
-                                AppLogger.i(LogCategory.PLAYER, "Embed ready: $url")
-                            } else {
-                                _state.value = _state.value.copy(
-                                    embedLoading = false,
-                                    embedError = "This embed server has no source for episode $episode.",
-                                )
-                            }
-                        }
-                        .onFailure { e ->
-                            _state.value = _state.value.copy(
-                                embedLoading = false,
-                                embedError = "Embed failed: ${e.message ?: "network error"}. Try another E-server.",
-                            )
-                        }
-                }
-            } else if (slug != null) {
+            if (slug != null) {
                 repo.anikageSources(slug, episode, server.lowercase(), lang, refresh)
                     .onSuccess { response ->
                         if (episodeGen.get() != gen) return@onSuccess // stale
@@ -1032,6 +1278,7 @@ class WatchViewModel(
                                 "Try the other language or another server."
                             AppLogger.w(LogCategory.PLAYER, "No stream sources for $slug ep $episode ($server/$lang)")
                         } else {
+                            markServerHealth(server, true)
                             val urlKind = if (best!!.isM3U8) "HLS(m3u8)" else (best.type ?: "file")
                             val host = runCatching { java.net.URI(streamUrl).host }.getOrDefault("?")
                             AppLogger.i(
@@ -1047,6 +1294,7 @@ class WatchViewModel(
                     .onFailure { e ->
                         if (episodeGen.get() != gen) return@onFailure // stale
                         AppLogger.w(LogCategory.PLAYER, "Sources failed for $slug ep $episode ($server/$lang)", e)
+                        markServerHealth(server, false)
                         failure = "$server couldn't provide this episode (${e.message ?: "network error"}). " +
                             "Trying the next server…"
                     }
@@ -1062,7 +1310,7 @@ class WatchViewModel(
             } else 0L
 
             _state.value = _state.value.copy(
-                streamUrl = if (activeEmbed != null) null else streamUrl,
+                streamUrl = streamUrl,
                 subtitles = subtitles,
                 savedPositionMs = saved,
                 streamLoading = false,
@@ -1070,12 +1318,12 @@ class WatchViewModel(
             )
 
             // ── automatic provider fallback when resolution yielded nothing ──
-            if (streamUrl == null && activeEmbed == null && slug != null && failure != null &&
+            if (streamUrl == null && slug != null && failure != null &&
                 !failure!!.contains("isn't in the Anikage catalogue") &&
                 maybeAutoFallback(null, gen, failure)
             ) {
                 return@launch // fallback reload owns the episode now
-            } else if (streamUrl != null && activeEmbed == null) {
+            } else if (streamUrl != null) {
                 preparePlayer(episode, gen)
             }
 
@@ -1088,7 +1336,7 @@ class WatchViewModel(
                 launch {
                     repo.anikageServersResponse(slug, episode).getOrNull()?.let { raw ->
                         if (episodeGen.get() == gen) {
-                            buildServerPanels(raw.servers, raw.embeds, _state.value.streamServer, lang)
+                            buildServerPanels(raw.servers, _state.value.streamServer, lang)
                         }
                     }
                 }
@@ -1113,11 +1361,11 @@ class WatchViewModel(
 
     private fun buildServerPanels(
         raw: List<AnikageServer>,
-        embeds: List<com.anikage.app.core.data.api.AnikageEmbedRef>,
         server: String,
         lang: String,
     ) {
-        if (raw.isEmpty() && embeds.isEmpty()) return
+        if (raw.isEmpty()) return
+        val previousHealth = _state.value.servers.associateBy({ it.name.lowercase() }, { it.healthy })
         val models = raw.map { s ->
             StreamServer(
                 id = s.providerId,
@@ -1125,12 +1373,8 @@ class WatchViewModel(
                 supportsSub = s.subTypes.isEmpty() || s.subTypes.contains("sub"),
                 supportsDub = s.subTypes.contains("dub"),
                 isDefault = s.default,
-            )
+            ).also { it.healthy = previousHealth[it.name.lowercase()] }
         }.distinctBy { it.id }
-        val embedModels = embeds.mapNotNull { e ->
-            val key = e.key ?: e.id ?: return@mapNotNull null
-            EmbedServer(key = key, label = e.label ?: displayServerName(key))
-        }.distinctBy { it.key }
         val currentValid = models.any {
             it.id.equals(server, ignoreCase = true) &&
                 (if (lang == "dub") it.supportsDub else it.supportsSub)
@@ -1140,7 +1384,6 @@ class WatchViewModel(
         }
         _state.value = _state.value.copy(
             servers = models,
-            embedServers = embedModels,
             streamServer = if (currentValid) server else (fallback?.name ?: server),
         )
     }
@@ -1215,7 +1458,9 @@ class WatchViewModel(
         }
         player.setMediaItem(builder.build(), _state.value.savedPositionMs)
 
-        // Quality cap (site: streamQuality setting) via track selection.
+        // Quality cap (site: streamQuality setting) via track selection —
+        // kept as a coarse cap; the exact persisted pick is applied by
+        // applyPersistedQualityIfNeeded once the renditions are known.
         runCatching {
             val quality = SettingsState.streamQuality
             val params = player.trackSelectionParameters.buildUpon()
@@ -1235,6 +1480,7 @@ class WatchViewModel(
         updateState { copy(speed = SettingsState.playbackRate, positionMs = savedPositionMs) }
         player.prepare()
         checkedVideoTrackForItem = false
+        appliedPersistedQuality = false
         refreshTrackMenus(player.currentTracks)
         if (SettingsState.autoplay) player.play()
     }
@@ -1420,11 +1666,14 @@ class WatchViewModel(
             viewCount = null,
             positionMs = 0L,
             bufferedMs = 0L,
-            embedUrl = null,
-            embedError = null,
             localFile = null,
             nextUp = null,
         )
+        // Keep the season selector in sync when jumping across seasons.
+        val seasons = _state.value.seasons
+        if (seasons.size > 1 && seasons.none { it.key == _state.value.selectedSeason && ep in it.episodes.map { e -> e.number } }) {
+            _state.value = _state.value.copy(selectedSeason = seasonOf(_state.value.episodes, ep))
+        }
         viewSent.set(false)
         loadEpisode(ep)
     }
@@ -1439,57 +1688,20 @@ class WatchViewModel(
             streamLang = lang,
             streamUrl = null,
             playbackError = null,
-            embedUrl = null,
-            embedError = null,
             localFile = null,
         )
         loadEpisode(_state.value.episode)
     }
 
-    /** Site's server-chip switch — reloads the current episode's stream. */
+    /** Server-chip switch — reloads the current episode's stream. */
     fun setStreamServer(server: String) {
         if (_state.value.streamServer == server && !autoFallingBack) return
         episodeJob?.cancel()
         failedProviders.clear() // user's explicit pick gets a fresh chance
+        markServerHealth(server, true) // reset observed health for the pick
         _state.value = _state.value.copy(
             streamServer = server,
             streamUrl = null,
-            playbackError = null,
-            embedUrl = null,
-            embedError = null,
-            localFile = null,
-        )
-        loadEpisode(_state.value.episode)
-    }
-
-    /** Site's E-server chip — switches to the WebView embed player. */
-    fun setEmbedServer(embed: EmbedServer?) {
-        if (embed == null) {
-            episodeJob?.cancel()
-            failedProviders.clear()
-            _state.value = _state.value.copy(
-                embedActive = null,
-                embedUrl = null,
-                embedError = null,
-                embedLoading = false,
-                streamUrl = null,
-                playbackError = null,
-                localFile = null,
-            )
-            loadEpisode(_state.value.episode)
-            return
-        }
-        if (_state.value.embedActive?.key == embed.key) return
-        saveProgressNow()
-        pause()
-        episodeJob?.cancel()
-        failedProviders.clear()
-        _state.value = _state.value.copy(
-            embedActive = embed,
-            embedUrl = null,
-            embedError = null,
-            streamUrl = null,
-            streamError = null,
             playbackError = null,
             localFile = null,
         )
@@ -1507,13 +1719,15 @@ class WatchViewModel(
             streamUrl = null,
             playbackError = null,
             streamError = null,
-            embedUrl = null,
-            embedError = null,
             cues = emptyList(),
             localFile = null,
         )
         loadEpisode(_state.value.episode, refresh = refresh)
     }
+
+    // -----------------------------------------------------------------------
+    //  Comments — real posting through the signed-in session (directive #8)
+    // -----------------------------------------------------------------------
 
     /** Reload comments for the current episode (pull-to-refresh in the panel). */
     fun refreshComments() {
@@ -1536,6 +1750,8 @@ class WatchViewModel(
                             loading = false,
                             comments = comments,
                             total = comments.size,
+                            posting = false,
+                            postError = null,
                         ),
                     )
                 },
@@ -1546,6 +1762,61 @@ class WatchViewModel(
                 },
             )
         }
+    }
+
+    /**
+     * POST a comment (site's own API; the session cookie rides along).
+     * Duplicate-submission safe: [CommentsUiState.posting] gates the button.
+     */
+    fun postComment(content: String, isSpoiler: Boolean) {
+        val text = content.trim()
+        if (text.isEmpty() || _state.value.comments.posting) return
+        if (!AuthManager.isAuthenticated) {
+            updateState { copy(comments = comments.copy(postError = "Sign in to post a comment.")) }
+            return
+        }
+        val episode = _state.value.episode
+        val d = _state.value.details
+        updateState { copy(comments = comments.copy(posting = true, postError = null, justPosted = false)) }
+        viewModelScope.launch {
+            val result = repo.postComment(
+                animeId = animeId,
+                slug = _state.value.slug,
+                episode = episode,
+                content = text,
+                isSpoiler = isSpoiler,
+                aniTitle = d?.displayTitle(),
+                aniImage = d?.coverImage?.best(),
+            )
+            result.fold(
+                onSuccess = { posted ->
+                    // Prepend the new comment + clear the composer state.
+                    val fresh = listOf(posted) + _state.value.comments.comments
+                    updateState {
+                        copy(
+                            comments = comments.copy(
+                                posting = false,
+                                postError = null,
+                                justPosted = true,
+                                comments = fresh,
+                                total = fresh.size,
+                            ),
+                        )
+                    }
+                    AppLogger.i(LogCategory.NETWORK, "Comment posted (ep $episode, ${text.length} chars)")
+                },
+                onFailure = { e ->
+                    val message = e.message ?: "Couldn't post the comment."
+                    updateState { copy(comments = comments.copy(posting = false, postError = message)) }
+                    AppLogger.w(LogCategory.NETWORK, "Comment post failed: $message")
+                },
+            )
+        }
+    }
+
+    /** Clear the transient just-posted confirmation / error. */
+    fun clearCommentTransient() {
+        updateState { copy(comments = comments.copy(justPosted = false, postError = null)) }
     }
 
     // -----------------------------------------------------------------------
@@ -1591,23 +1862,43 @@ class WatchViewModel(
 
     /** Start an in-app download of the current episode at [height] (0 = auto). */
     fun startDownload(height: Int) {
+        startEpisodeDownloads(listOf(_state.value.episode), height)
+    }
+
+    /**
+     * Batch download (user directive #5): enqueue a SET of episodes at
+     * [height]. Skips episodes that are already downloaded.
+     */
+    fun startEpisodeDownloads(episodes: List<Int>, height: Int) {
         val slug = _state.value.slug ?: return
         val d = _state.value.details
-        EpisodeDownloadEngine.enqueue(
-            app,
-            EpisodeDownloadEngine.DownloadRequest(
-                animeId = animeId,
-                slug = slug,
-                episode = _state.value.episode,
-                provider = _state.value.streamServer,
-                lang = _state.value.streamLang,
-                height = height,
-                titleRomaji = d?.title?.romaji,
-                titleEnglish = d?.title?.english,
-                episodeTitle = _state.value.currentEpisodeItem?.title,
-                posterUrl = d?.coverImage?.best(),
-            ),
-        )
+        viewModelScope.launch {
+            val existing = repo.downloadedForAnime(animeId).map { it.episode }.toSet()
+            val todo = episodes.filter { it !in existing }
+            val skipped = episodes.size - todo.size
+            todo.forEach { ep ->
+                EpisodeDownloadEngine.enqueue(
+                    app,
+                    EpisodeDownloadEngine.DownloadRequest(
+                        animeId = animeId,
+                        slug = slug,
+                        episode = ep,
+                        provider = _state.value.streamServer,
+                        lang = _state.value.streamLang,
+                        height = height,
+                        titleRomaji = d?.title?.romaji,
+                        titleEnglish = d?.title?.english,
+                        episodeTitle = _state.value.episodes.firstOrNull { it.number == ep }?.title,
+                        posterUrl = d?.coverImage?.best(),
+                    ),
+                )
+            }
+            AppLogger.i(
+                LogCategory.DATA,
+                "Batch download: ${todo.size} episode(s) enqueued" +
+                    if (skipped > 0) " ($skipped already downloaded, skipped)" else "",
+            )
+        }
     }
 
     /** Load the completed download row for an episode into state. */
@@ -1717,7 +2008,7 @@ class WatchViewModel(
     }
 
     // -----------------------------------------------------------------------
-    //  Local anime list
+    //  Local anime list + subscription
     // -----------------------------------------------------------------------
 
     /** Set / clear this anime's local list status (null removes it). */
@@ -1733,6 +2024,40 @@ class WatchViewModel(
                 coverColor = d?.coverImage?.color,
             )
             updateState { copy(listStatus = status) }
+        }
+    }
+
+    /**
+     * Subscribe / unsubscribe to this anime (directive #12). The baseline
+     * episode count comes from the live info payload, so notifications fire
+     * only for episodes released AFTER subscribing.
+     */
+    fun toggleSubscription() {
+        val d = _state.value
+        val slug = d.slug ?: return
+        viewModelScope.launch {
+            if (d.subscribed) {
+                repo.unsubscribe(animeId)
+                updateState { copy(subscribed = false) }
+                AppLogger.i(LogCategory.DATA, "Unsubscribed from '${d.title}'")
+            } else {
+                val info = repo.animeInfoBySlug(slug)
+                repo.subscribe(
+                    animeId = animeId,
+                    slug = slug,
+                    titleRomaji = d.details?.title?.romaji,
+                    titleEnglish = d.details?.title?.english,
+                    posterUrl = d.details?.coverImage?.best(),
+                    coverColor = d.details?.coverImage?.color,
+                    status = info?.status ?: d.details?.status,
+                    knownEpisodes = info?.totalEpisodes
+                        ?: d.details?.episodes
+                        ?: d.totalEpisodes,
+                    nextAiringEpisode = info?.nextAiringEpisode?.episode ?: d.details?.nextAiringEpisode?.episode,
+                )
+                updateState { copy(subscribed = true) }
+                AppLogger.i(LogCategory.DATA, "Subscribed to '${d.title}' (baseline episodes counted)")
+            }
         }
     }
 
@@ -1764,6 +2089,8 @@ class WatchViewModel(
         episodeJob?.cancel()
         pipelineJob?.cancel()
         tickerJob?.cancel()
+        sleepJob?.cancel()
+        LiveCaptionsEngine.stop()
         // Last-resort fire-and-forget save (the screen's onDispose + the 5s
         // ticker already cover the normal paths; viewModelScope is cancelled
         // before onCleared, so a GlobalScope write is the only reliable way).

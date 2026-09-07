@@ -110,3 +110,31 @@ interface AnimeListDao {
     @Query("DELETE FROM anime_list WHERE animeId = :animeId")
     suspend fun delete(animeId: Int)
 }
+
+@Dao
+interface SubscriptionDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: SubscriptionEntity)
+
+    @Query("SELECT * FROM subscriptions ORDER BY subscribedAt DESC")
+    fun observeAll(): Flow<List<SubscriptionEntity>>
+
+    @Query("SELECT * FROM subscriptions ORDER BY subscribedAt DESC")
+    suspend fun all(): List<SubscriptionEntity>
+
+    @Query("SELECT * FROM subscriptions WHERE animeId = :animeId")
+    suspend fun get(animeId: Int): SubscriptionEntity?
+
+    @Query("UPDATE subscriptions SET lastKnownEpisodes = :episodeCount, lastNotifiedEpisode = :notified, nextAiringEpisode = :nextAiring, lastCheckedAt = :checkedAt, releaseStatus = :status WHERE animeId = :animeId")
+    suspend fun updateCheck(animeId: Int, episodeCount: Int, notified: Int, nextAiring: Int?, status: String?, checkedAt: Long)
+
+    @Query("UPDATE subscriptions SET lastNotifiedEpisode = :episode WHERE animeId = :animeId")
+    suspend fun markNotified(animeId: Int, episode: Int)
+
+    @Query("DELETE FROM subscriptions WHERE animeId = :animeId")
+    suspend fun delete(animeId: Int)
+
+    @Query("DELETE FROM subscriptions")
+    suspend fun clear()
+}

@@ -10,7 +10,7 @@ package com.anikage.app.core.nav
  *   /schedule            -> Airing schedule (this week)
  *   /search              -> Search input + results
  *   /music               -> OST info (Anikage-specific)
- *   /torrents            -> Anime info (Anikage-specific)
+ *   /subscriptions       -> Subscribed anime + new-episode tracking (v2.2.0)
  *   /anime/info/{id}     -> Anime details
  *   /anime/watch/{id}    -> Native player (carries the Anikage slug when
  *                           known, so sources load without a title search)
@@ -27,7 +27,7 @@ object Routes {
     const val SCHEDULE = "schedule"
     const val SEARCH = "search"
     const val MUSIC = "music"
-    const val TORRENTS = "torrents"
+    const val SUBSCRIPTIONS = "subscriptions"
     const val SETTINGS = "settings"
     const val NOTIFICATIONS = "notifications"
     const val DIAGNOSTICS = "diagnostics"
@@ -59,14 +59,16 @@ object Routes {
     const val MUSIC_INFO = "music_info/{slug}?type={type}"
     fun musicInfo(slug: String, type: String) = "music_info/$slug?type=$type"
 
-    /** Bottom nav — exact site set + order: Home, Browse, Music, Schedule, Torrents
-     *  (base routes, no query patterns, for visibility checks). */
+    /**
+     * Bottom nav — v2.2.0 (directive #10/#13): Torrents REMOVED, replaced
+     * by Subscriptions. Order: Home, Browse, Music, Schedule, Subscriptions.
+     */
     val bottomNav: List<String> = listOf(
-        HOME, BROWSE.substringBefore('?'), MUSIC, SCHEDULE, TORRENTS,
+        HOME, BROWSE.substringBefore('?'), MUSIC, SCHEDULE, SUBSCRIPTIONS,
     )
     /** Routes that show the top app bar (logo + search + bell + profile). */
     val topBarScreens: List<String> = listOf(
-        HOME, BROWSE, SCHEDULE, SEARCH, MUSIC, TORRENTS, DETAILS, WATCH,
+        HOME, BROWSE, SCHEDULE, SEARCH, MUSIC, SUBSCRIPTIONS, DETAILS, WATCH,
     )
 
     /** Account pages use their own back headers (site: /(account) layout). */

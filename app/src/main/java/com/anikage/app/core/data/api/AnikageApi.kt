@@ -7,6 +7,7 @@ import java.io.IOException
 import java.net.URLEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -267,6 +268,72 @@ class AnikageApi(
         val url = url(auth, "/api/views/anime/$slug/episode/$episode/views")
         return json.decodeFromString(get(url))
     }
+
+    /**
+     * POST a comment — the exact call the site's comment composer makes
+     * (auth.anikage.cc/api/comments with the login session cookie; body:
+     * animeId, slug, episode, content, isSpoiler, aniTitle, aniImage —
+     * live-verified shape from the site's own JS). Requires the user to be
+     * signed in; the server answers 401 otherwise.
+     */
+    suspend fun postComment(
+        animeId: Int,
+        slug: String?,
+        episode: Int,
+        content: String,
+        isSpoiler: Boolean = false,
+        aniTitle: String? = null,
+        aniImage: String? = null,
+    ): Result<AnikageComment> = withContext(Dispatchers.IO) {
+        val auth = authBase
+            ?: return@withContext Result.failure(IllegalStateException("Auth API not configured"))
+        val started = System.currentTimeMillis()
+        val endpoint = url(auth, "/api/comments")
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("animeId", kotlinx.serialization.json.JsonPrimitive(animeId))
+            slug?.let { put("slug", kotlinx.serialization.json.JsonPrimitive(it)) }
+            put("episode", kotlinx.serialization.json.JsonPrimitive(episode))
+            put("content", kotlinx.serialization.json.JsonPrimitive(content))
+            put("isSpoiler", kotlinx.serialization.json.JsonPrimitive(isSpoiler))
+            aniTitle?.let { put("aniTitle", kotlinx.serialization.json.JsonPrimitive(it)) }
+            aniImage?.let { put("aniImage", kotlinx.serialization.json.JsonPrimitive(it)) }
+        }
+        AppLogger.d(LogCategory.NETWORK, "Anikage -> POST $endpoint")
+        try {
+            val requestBuilder = Request.Builder()
+                .url(endpoint)
+                .post(body.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+                .addHeader("User-Agent", Config.Network.USER_AGENT)
+                .addHeader("Accept", "application/json")
+                .addHeader("Referer", "${Config.ANIKAGE_SITE_ORIGIN}/")
+                .addHeader("Origin", Config.ANIKAGE_SITE_ORIGIN)
+            // Attach the real login session (cookie replay).
+            com.anikage.app.core.auth.AuthManager.authorize(requestBuilder)
+            val raw = client.newCall(requestBuilder.build()).execute().use { response ->
+                val text = response.body?.string()
+                    ?: throw IOException("Empty response body")
+                if (!response.isSuccessful) {
+                    val message = runCatching {
+                        json.decodeFromString<AnikageError>(text).message
+                    }.getOrNull() ?: text.take(120)
+                    throw IOException("HTTP ${response.code}: $message")
+                }
+                text
+            }
+            AppLogger.d(
+                LogCategory.NETWORK,
+                "Anikage <- 200 (${System.currentTimeMillis() - started}ms, ${raw.length} bytes)",
+            )
+            Result.success(json.decodeFromString<AnikageComment>(raw))
+        } catch (e: Exception) {
+            AppLogger.e(LogCategory.NETWORK, "Anikage FAILED POST $endpoint", e)
+            Result.failure(e)
+        }
+    }
+
+    @Serializable
+    private data class AnikageError(val message: String? = null, val code: String? = null)
+
 
     /**
      * Record an episode view — the exact call the site's player fires once

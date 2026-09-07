@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,7 @@ import com.anikage.app.Config
 import com.anikage.app.core.data.AnimePreviewStore
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.SessionLogger
+import com.anikage.app.core.media.PlayerFullscreen
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.about.AboutScreen
@@ -62,7 +64,7 @@ import com.anikage.app.ui.schedule.ScheduleScreen
 import com.anikage.app.ui.search.SearchScreen
 import com.anikage.app.ui.settings.DiagnosticsScreen
 import com.anikage.app.ui.settings.SettingsScreen
-import com.anikage.app.ui.torrents.TorrentsScreen
+import com.anikage.app.ui.subscriptions.SubscriptionsScreen
 
 @Composable
 fun AnikageApp() {
@@ -71,12 +73,27 @@ fun AnikageApp() {
     val currentRoute = backStack?.destination?.route
 
     // Site: the fixed top nav floats over EVERY content page (home, browse,
-    // schedule, music, torrents, info, watch). Account pages (settings,
+    // schedule, music, subscriptions, info, watch). Account pages (settings,
     // profile, notifications) use their own back headers instead.
     // Compare base routes so pattern routes (browse?sort={sort}) match.
     val currentBase = currentRoute?.substringBefore('?')
-    val showTopBar = currentBase !in Routes.accountScreens && currentBase != Routes.DIAGNOSTICS && currentBase != Routes.ABOUT
-    val showBottomNav = currentBase in Routes.bottomNav
+    val fullscreenActive = PlayerFullscreen.isActive
+    val showTopBar = !fullscreenActive &&
+        currentBase !in Routes.accountScreens && currentBase != Routes.DIAGNOSTICS && currentBase != Routes.ABOUT
+    val showBottomNav = !fullscreenActive && currentBase in Routes.bottomNav
+
+    // Subscription-notification deep link: open the anime's watch screen
+    // exactly once, whenever a request lands.
+    val pendingWatch = PendingNavigation.openWatch
+    LaunchedEffect(pendingWatch) {
+        pendingWatch?.let { target ->
+            AnimePreviewStore.byId(target.animeId)?.let { AnimePreviewStore.put(it) }
+            navController.navigate(
+                Routes.watch(target.animeId, target.episode.coerceAtLeast(0)),
+            ) { launchSingleTop = true }
+            PendingNavigation.consume()
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -139,14 +156,12 @@ fun AnikageApp() {
                 }
                 composable(Routes.SCHEDULE) {
                     ScheduleScreen(
-                        // Site: schedule entries link into the anime pages;
-                        // the app opens the watch screen AT that episode —
-                        // the one unified player experience (ep pinned).
+                        // v2.2.0 (directive #11): schedule entries open the
+                        // SAME polished custom anime detail page as the rest
+                        // of the app (never a separate/broken screen).
                         onEntryClick = { schedule ->
                             AnimePreviewStore.put(schedule.media)
-                            navController.navigate(
-                                Routes.watch(schedule.media.id, schedule.episode, schedule.media.slug),
-                            )
+                            navController.navigate(Routes.details(schedule.media.id))
                         },
                     )
                 }
@@ -166,8 +181,17 @@ fun AnikageApp() {
                         },
                     )
                 }
-                composable(Routes.TORRENTS) {
-                    TorrentsScreen()
+                composable(Routes.SUBSCRIPTIONS) {
+                    SubscriptionsScreen(
+                        onWatchClick = { anime ->
+                            AnimePreviewStore.put(anime)
+                            navController.navigate(Routes.watch(anime.id, 0, anime.slug))
+                        },
+                        onOpenDetails = { anime ->
+                            AnimePreviewStore.put(anime)
+                            navController.navigate(Routes.details(anime.id))
+                        },
+                    )
                 }
                 composable(Routes.NOTIFICATIONS) {
                     NotificationsScreen(
@@ -278,6 +302,8 @@ fun AnikageApp() {
             }
 
             // Floating top bar (overlay) — site's fixed nav, all content pages.
+            // HIDDEN during fullscreen video (directive #2: the tab bar must
+            // never be visible in fullscreen).
             if (showTopBar) {
                 FloatingTopBar(
                     currentRoute = currentRoute ?: "home",
@@ -301,16 +327,18 @@ fun AnikageApp() {
             }
 
             // Crash recovery banner — shown once after a crashed session.
-            CrashRecoveryBanner(
-                onOpenLogs = {
-                    navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true }
-                },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 64.dp)
-                    .zIndex(20f),
-            )
+            if (!fullscreenActive) {
+                CrashRecoveryBanner(
+                    onOpenLogs = {
+                        navController.navigate(Routes.DIAGNOSTICS) { launchSingleTop = true }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 64.dp)
+                        .zIndex(20f),
+                )
+            }
 
             // Floating bottom mobile nav (site: centered glass pill).
             if (showBottomNav) {

@@ -160,6 +160,25 @@ object SettingsState {
     /** Only download over unmetered (Wi-Fi) connections. */
     var downloadsWifiOnly by mutableStateOf(false)
 
+    /** Automatically download the next episode after finishing one offline-download session. */
+    var autoDownloadNextEpisode by mutableStateOf(false)
+
+    /**
+     * The user's chosen playback quality HEIGHT (1080, 720, 480…).
+     * 0 = Auto (adaptive). Persisted so the choice survives episode
+     * switches, anime switches and app restarts (user directive #4).
+     */
+    var preferredQualityHeight by mutableIntStateOf(0)
+
+    /** Live Captions (on-device speech recognition) master toggle. */
+    var liveCaptionsEnabled by mutableStateOf(false)
+
+    /** Recognition language hint for live captions (BCP-47 or plain tag). */
+    var liveCaptionsLanguage by mutableStateOf("en-US")
+
+    /** Notify when subscribed anime release new episodes. */
+    var subscriptionNotifications by mutableStateOf(true)
+
     // ── lifecycle ─────────────────────────────────────────────────────────
 
     fun init(context: Context) {
@@ -199,6 +218,11 @@ object SettingsState {
         autoSkipFiller = p.getBoolean("autoSkipFiller", false)
         downloadQualityHeight = p.getInt("downloadQualityHeight", 0)
         downloadsWifiOnly = p.getBoolean("downloadsWifiOnly", false)
+        autoDownloadNextEpisode = p.getBoolean("autoDownloadNextEpisode", false)
+        preferredQualityHeight = p.getInt("preferredQualityHeight", 0)
+        liveCaptionsEnabled = p.getBoolean("liveCaptionsEnabled", false)
+        liveCaptionsLanguage = p.getString("liveCaptionsLanguage", "en-US") ?: "en-US"
+        subscriptionNotifications = p.getBoolean("subscriptionNotifications", true)
     }
 
     private fun save(context: Context, block: android.content.SharedPreferences.Editor.() -> Unit) {
@@ -247,4 +271,9 @@ object SettingsState {
     fun setAutoSkipFiller(context: Context, v: Boolean) { autoSkipFiller = v; save(context) { putBoolean("autoSkipFiller", v) } }
     fun setDownloadQualityHeight(context: Context, v: Int) { downloadQualityHeight = v; save(context) { putInt("downloadQualityHeight", v) } }
     fun setDownloadsWifiOnly(context: Context, v: Boolean) { downloadsWifiOnly = v; save(context) { putBoolean("downloadsWifiOnly", v) } }
+    fun setAutoDownloadNextEpisode(context: Context, v: Boolean) { autoDownloadNextEpisode = v; save(context) { putBoolean("autoDownloadNextEpisode", v) } }
+    fun setPreferredQualityHeight(context: Context, v: Int) { preferredQualityHeight = v; save(context) { putInt("preferredQualityHeight", v) } }
+    fun setLiveCaptionsEnabled(context: Context, v: Boolean) { liveCaptionsEnabled = v; save(context) { putBoolean("liveCaptionsEnabled", v) } }
+    fun setLiveCaptionsLanguage(context: Context, v: String) { liveCaptionsLanguage = v; save(context) { putString("liveCaptionsLanguage", v) } }
+    fun setSubscriptionNotifications(context: Context, v: Boolean) { subscriptionNotifications = v; save(context) { putBoolean("subscriptionNotifications", v) } }
 }

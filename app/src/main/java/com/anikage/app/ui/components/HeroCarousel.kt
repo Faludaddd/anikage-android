@@ -1,6 +1,5 @@
 package com.anikage.app.ui.components
 
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -47,7 +46,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -63,7 +61,6 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
-import com.anikage.app.Config
 import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
@@ -72,26 +69,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * HERO CAROUSEL — 1:1 port of the Anikage website hero (`.hero-shell`).
+ * HERO CAROUSEL — 1:1 port of the Anikage website hero (`.hero-shell`),
+ * rebuilt as SELF-CONTAINED SLIDES (directive #1 fix).
  *
- * Site structure (extracted from the live DOM):
- *   section.hero-shell h-[72vh] (md:90vh, lg:screen)
- *     ├─ img.hero-bg-layer  — TVDB series background artwork (spotlight.fanart)
- *     ├─ .hero-gradients    — 3 stacked gradients:
- *     │    bg-linear-to-t from-surface via-surface/30 to-surface/10
- *     │    bg-linear-to-r from-surface/60 via-surface/30 to-transparent
- *     │    top-1/4 bg-linear-to-b from-surface/40 to-transparent
- *     ├─ .hero-content (container-custom, bottom-left, pb-16)
- *     │    ├─ TVDB clearlogo img  max-h-[80px] md:max-h-[130px]
- *     │    │   drop-shadow(0 4px 24px rgba(0,0,0,.8))
- *     │    ├─ meta pills (score=yellow, year, episodes, format)
- *     │    ├─ genre chips (border-white/10 bg-black/50)
- *     │    ├─ synopsis line-clamp-2 text-base text-zinc-400
- *     │    └─ Watch Now (btn-primary WHITE) + More Info (blur secondary)
- *     └─ bottom bar: progress dots (w-4, active w-8 + animated fill),
- *        "N/M" counter (text-xs white/35 tabular), blur arrow buttons
+ * Why the rebuild: the previous version assembled the slide from loose
+ * siblings inside the pager page (artwork / gradients / content in
+ * different conditional branches), which let the content column vanish
+ * while the artwork stayed, and a WebView trailer layer mounted/unmounted
+ * mid-swipe could black out the artwork. Now:
  *
- * Auto-advance: 7s per slide, fill animates inside the active dot.
+ *  - ONE composable ([HeroSlide]) renders the WHOLE card — background
+ *    artwork with a fanart→banner→cover fallback chain, the exact site
+ *    gradient stack, the clear logo, meta pills, genre chips, synopsis,
+ *    Watch Now / More Info buttons. It all moves together, always.
+ *  - Per-slide image state is KEYED by the item id, so swipes can never
+ *    leak another slide's load state (the "picture only, UI gone" bug).
+ *  - NO WebView inside the pager. The trailer became a "Trailer" chip that
+ *    opens the YouTube app/intent — honest, and it can never black out
+ *    the artwork.
+ *  - HorizontalPager: native swipe + snap; neighbours are preloaded both
+ *    via beyondBoundsPageCount AND explicit Coil requests.
+ *  - Auto-advance never fights the user (resets while scrolling).
  */
 @Composable
 fun HeroCarousel(
@@ -115,19 +113,11 @@ fun HeroCarousel(
     val scope = rememberCoroutineScope()
 
     val totalItems = items.size
-    // Swipeable hero: HorizontalPager gives native drag + snap + momentum;
-    // arrows stay as secondary controls (site keeps them too).
-    // beyondBoundsPageCount = 1: the NEIGHBOUR slides stay composed, so
-    // their artwork is loaded BEFORE the swipe starts — no black slides
-    // mid-transition, ever (the old black-image bug).
     val pagerState = rememberPagerState(pageCount = { totalItems })
     var progress by remember(items) { mutableFloatStateOf(0f) }
 
     // Last user touch on the hero — pauses auto-advance so a programmed
-    // scroll can NEVER fight the user's drag (the old "inconsistent
-    // swiping" bug: the timer fired between touch-down and scroll-start,
-    // and animateScrollToPage cancelled the gesture). The parent Box's
-    // pointerInput observes raw touch-downs without consuming them.
+    // scroll can NEVER fight the user's drag.
     var lastTouchMs by remember { mutableLongStateOf(0L) }
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.isScrollInProgress }.collect { scrolling ->
@@ -146,21 +136,18 @@ fun HeroCarousel(
             val candidate = items[idx].fanartUrl ?: items[idx].bannerImage ?: items[idx].coverUrl()
             val logo = items[idx].clearLogoUrl
             listOfNotNull(candidate, logo).forEach { url ->
-                if (url != null) {
-                    val request = ImageRequest.Builder(context)
-                        .data(url)
-                        .memoryCacheKey(url)
-                        .build()
-                    runCatching { context.imageLoader.enqueue(request) }
-                }
+                val request = ImageRequest.Builder(context)
+                    .data(url)
+                    .memoryCacheKey(url)
+                    .build()
+                runCatching { context.imageLoader.enqueue(request) }
             }
         }
     }
 
     // Auto-advance with progress fill (site animates the active dot's fill).
-    // Restarts on every page change (swipe, dot tap, arrow) so the fill
-    // always tracks the VISIBLE slide. While the user interacts the window
-    // RESETS (never fights the drag, and never dies so autoplay resumes).
+    // Restarts on every page change; RESETS (never dies) while the user
+    // interacts.
     LaunchedEffect(pagerState.currentPage, totalItems) {
         if (totalItems < 2) return@LaunchedEffect
         progress = 0f
@@ -193,198 +180,21 @@ fun HeroCarousel(
             modifier = Modifier.fillMaxSize(),
             beyondBoundsPageCount = 1, // preload neighbour slides (no black gaps)
         ) { page ->
-            val current = items[page.coerceIn(0, totalItems - 1)]
-            val isSettled = pagerState.currentPage == page && !pagerState.isScrollInProgress
-
-        // ── Layer 0: background artwork with a REAL fallback chain — if the
-        // TVDB fanart 404s or the network hiccups, the banner/cover art takes
-        // over instead of a black slide. Never a blank hero again.
-        HeroArtwork(
-            fanart = current.fanartUrl,
-            banner = current.bannerImage,
-            cover = current.coverUrl(),
-            contentDescription = current.displayTitle(),
-        )
-
-        // ── Layer 0.5: muted trailer video (site: autoplayHeroTrailer plays
-        // the YouTube trailer full-bleed beneath the same gradient stack).
-        // Only mounted on the SETTLED page — a WebView churn during swipes
-        // was exactly the "image turns black" trigger (the pager disposes
-        // off-screen pages; each remount reloaded a black WebView).
-        if (com.anikage.app.core.settings.SettingsState.autoplayHeroTrailer &&
-            !current.trailerId.isNullOrBlank() && isSettled
-        ) {
-            HeroTrailerLayer(
-                trailerId = current.trailerId,
+            // ONE self-contained card per page: artwork + gradients + ALL
+            // the card UI (logo, pills, genres, synopsis, buttons) move
+            // together — they can never separate (directive #1).
+            HeroSlide(
+                item = items[page.coerceIn(0, totalItems - 1)],
+                isWide = isWide,
+                heroHeight = heroHeight,
+                onAnimeClick = onAnimeClick,
+                onWatchClick = onWatchClick,
                 modifier = Modifier.fillMaxSize(),
             )
         }
 
-        // ── Layer 1: gradient stack (exact site values)
-        // bottom-up: from-surface via-surface/30 to-surface/10
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0.0f to theme.surface.copy(alpha = 0.10f),
-                        0.5f to theme.surface.copy(alpha = 0.30f),
-                        1.0f to theme.surface,
-                    )
-                )
-        )
-        // left-right: from-surface/60 via-surface/30 to-transparent
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        0.0f to theme.surface.copy(alpha = 0.60f),
-                        0.5f to theme.surface.copy(alpha = 0.30f),
-                        1.0f to Color.Transparent,
-                    )
-                )
-        )
-        // top quarter: from-surface/40 to-transparent (nav readability)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(heroHeight * 0.25f)
-                .background(
-                    Brush.verticalGradient(
-                        0.0f to theme.surface.copy(alpha = 0.40f),
-                        1.0f to Color.Transparent,
-                    )
-                )
-        )
-
-        // ── Layer 2: content column (site: .hero-content bottom-left, pb-16)
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth(0.92f)
-                .padding(start = 16.dp, end = 16.dp, bottom = 64.dp),
-        ) {
-            // TVDB clearlogo — the anime's title ARTWORK, not text.
-            val clearLogo = current.clearLogoUrl
-            if (clearLogo != null) {
-                // Logo with error fallback to the styled title text — a dead
-                // logo URL no longer leaves a hole in the hero.
-                var logoFailed by remember(clearLogo) { mutableStateOf(false) }
-                if (!logoFailed) {
-                    AsyncImage(
-                        model = clearLogo,
-                        contentDescription = current.displayTitle(),
-                        contentScale = ContentScale.Fit,
-                        error = null,
-                        onError = { logoFailed = true },
-                        modifier = Modifier
-                            .heightIn(max = if (isWide) 130.dp else 80.dp)
-                            .padding(bottom = 16.dp),
-                    )
-                } else {
-                    Text(
-                        text = current.displayTitle(),
-                        style = WebTextStyles.titleHero,
-                        color = Color.White,
-                        fontWeight = FontWeight.ExtraBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(bottom = 16.dp),
-                    )
-                }
-            } else {
-                // Fallback only when the API payload has no logo (offline mode).
-                Text(
-                    text = current.displayTitle(),
-                    style = WebTextStyles.titleHero,
-                    color = Color.White,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = 16.dp),
-                )
-            }
-
-            // ── Meta pills row (site: .meta-pill-blur)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                current.averageScore?.let { score ->
-                    // Lucide star + % — the site's hero score pill
-                    // (border-yellow-500/40 bg-yellow-500/20 text-yellow-400).
-                    MetaPill(
-                        lucideStar = true,
-                        text = "${score}%",
-                        iconTint = Color(0xFFFACC15),
-                        border = Color(0x66FACC15),       // yellow-500/40
-                        background = Color(0x33FACC15),   // yellow-500/20
-                        textTint = Color(0xFFFACC15),
-                        bold = true,
-                    )
-                }
-                current.seasonYear?.let { year ->
-                    MetaPill(icon = Icons.Default.CalendarMonth, text = year.toString())
-                }
-                current.episodes?.takeIf { it > 0 }?.let { eps ->
-                    MetaPill(icon = Icons.Default.Layers, text = "$eps Episodes")
-                }
-                current.duration?.takeIf { it > 0 }?.let { dur ->
-                    MetaPill(text = "$dur min")
-                }
-                current.format?.let { fmt ->
-                    MetaPill(icon = Icons.Default.Tv, text = fmt, upperCase = true)
-                }
-            }
-
-            // ── Genre chips (site: rounded-full border-white/10 bg-black/50)
-            if (current.genres.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.padding(top = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    current.genres.take(3).forEach { genre ->
-                        GenreChip(text = genre)
-                    }
-                }
-            }
-
-            // ── Synopsis (site: line-clamp-2 text-base leading-relaxed text-zinc-400)
-            current.description?.takeIf { it.isNotBlank() }?.let { synopsis ->
-                Text(
-                    text = HtmlText.clean(synopsis),
-                    color = Color(0xFFA1A1AA),            // zinc-400
-                    style = WebTextStyles.base,
-                    lineHeight = 24.sp,
-                    maxLines = if (isWide) 3 else 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth(0.85f)
-                        .padding(top = 12.dp, bottom = 20.dp),
-                )
-            }
-
-            // ── Buttons (site: btn-primary = WHITE bg / black text)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                HeroPrimaryButton(
-                    icon = Icons.Default.PlayArrow,
-                    text = "Watch Now",
-                    onClick = { onWatchClick(current) },
-                )
-                HeroSecondaryButton(
-                    icon = Icons.Default.Info,
-                    text = "More Info",
-                    onClick = { onAnimeClick(current) },
-                )
-            }
-        }
-        } // end pager page
-
-        // ── Bottom controls: dots + counter + arrows (site: bottom-4)
+        // ── Bottom controls: dots + counter + arrows (site: bottom-4) ──
+        // These live OUTSIDE the pager — they never swipe with the slides.
         Row(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -444,6 +254,211 @@ fun HeroCarousel(
     }
 }
 
+/**
+ * ONE hero card: every layer in a single Box — the artwork, the exact site
+ * gradient stack, and the content column (clear logo / title, meta pills,
+ * genre chips, synopsis, Watch Now + More Info). Per-slide state (logo
+ * fallback, artwork attempt) is keyed by the anime id, so swipes can never
+ * cross-contaminate slides.
+ */
+@Composable
+private fun HeroSlide(
+    item: Anime,
+    isWide: Boolean,
+    heroHeight: androidx.compose.ui.unit.Dp,
+    onAnimeClick: (Anime) -> Unit,
+    onWatchClick: (Anime) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val theme = LocalAnikageTheme.current
+    val context = LocalContext.current
+
+    Box(modifier = modifier.background(theme.surface)) {
+        // ── Layer 0: background artwork — fanart → banner → cover chain.
+        //    Per-item KEYED state: each slide owns its attempt index.
+        val artworkKey = remember(item.id) { item.id }
+        val candidates = remember(item.id) {
+            listOfNotNull(item.fanartUrl, item.bannerImage, item.coverUrl())
+        }
+        var attempt by remember(artworkKey) { mutableIntStateOf(0) }
+        var showPlaceholder by remember(artworkKey) { mutableStateOf(candidates.isEmpty()) }
+        if (showPlaceholder || candidates.isEmpty()) {
+            // No artwork at all: branded gradient, never plain black.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.linearGradient(
+                            listOf(theme.surfaceElevated, theme.surface),
+                        ),
+                    ),
+            )
+        } else {
+            val url = candidates[attempt.coerceIn(0, candidates.lastIndex)]
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(url)
+                    .crossfade(220)
+                    .memoryCacheKey(url)
+                    .build(),
+                contentDescription = item.displayTitle(),
+                contentScale = ContentScale.Crop,
+                onSuccess = { showPlaceholder = false },
+                onError = {
+                    if (attempt < candidates.lastIndex) attempt += 1
+                    else showPlaceholder = true
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // ── Layer 1: gradient stack (exact site values) ──────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to theme.surface.copy(alpha = 0.10f),
+                        0.5f to theme.surface.copy(alpha = 0.30f),
+                        1.0f to theme.surface,
+                    ),
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0.0f to theme.surface.copy(alpha = 0.60f),
+                        0.5f to theme.surface.copy(alpha = 0.30f),
+                        1.0f to Color.Transparent,
+                    ),
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(heroHeight * 0.25f)
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to theme.surface.copy(alpha = 0.40f),
+                        1.0f to Color.Transparent,
+                    ),
+                ),
+        )
+
+        // ── Layer 2: content column (site: .hero-content bottom-left) ────
+        // UNCONDITIONAL: the card UI is never gated on load state — the
+        // "everything disappeared, only the picture showed" fix.
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth(0.92f)
+                .padding(start = 16.dp, end = 16.dp, bottom = 64.dp),
+        ) {
+            // TVDB clearlogo — the anime's title ARTWORK, with a text
+            // fallback. Keyed per item so a failed logo never leaks.
+            val clearLogo = item.clearLogoUrl
+            var logoFailed by remember(item.id, clearLogo) { mutableStateOf(false) }
+            if (clearLogo != null && !logoFailed) {
+                AsyncImage(
+                    model = clearLogo,
+                    contentDescription = item.displayTitle(),
+                    contentScale = ContentScale.Fit,
+                    onError = { logoFailed = true },
+                    modifier = Modifier
+                        .heightIn(max = if (isWide) 130.dp else 80.dp)
+                        .padding(bottom = 16.dp),
+                )
+            } else {
+                Text(
+                    text = item.displayTitle(),
+                    style = WebTextStyles.titleHero,
+                    color = Color.White,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 16.dp),
+                )
+            }
+
+            // ── Meta pills row (site: .meta-pill-blur) ────────────────────
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                item.averageScore?.let { score ->
+                    MetaPill(
+                        lucideStar = true,
+                        text = "${score}%",
+                        iconTint = Color(0xFFFACC15),
+                        border = Color(0x66FACC15),       // yellow-500/40
+                        background = Color(0x33FACC15),   // yellow-500/20
+                        textTint = Color(0xFFFACC15),
+                        bold = true,
+                    )
+                }
+                item.seasonYear?.let { year ->
+                    MetaPill(icon = Icons.Default.CalendarMonth, text = year.toString())
+                }
+                item.episodes?.takeIf { it > 0 }?.let { eps ->
+                    MetaPill(icon = Icons.Default.Layers, text = "$eps Episodes")
+                }
+                item.duration?.takeIf { it > 0 }?.let { dur ->
+                    MetaPill(text = "$dur min")
+                }
+                item.format?.let { fmt ->
+                    MetaPill(icon = Icons.Default.Tv, text = fmt, upperCase = true)
+                }
+            }
+
+            // ── Genre chips (site: rounded-full border-white/10 bg-black/50)
+            if (item.genres.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item.genres.take(3).forEach { genre ->
+                        GenreChip(text = genre)
+                    }
+                }
+            }
+
+            // ── Synopsis (site: line-clamp-2 text-base leading-relaxed) ──
+            item.description?.takeIf { it.isNotBlank() }?.let { synopsis ->
+                Text(
+                    text = HtmlText.clean(synopsis),
+                    color = Color(0xFFA1A1AA),            // zinc-400
+                    style = WebTextStyles.base,
+                    lineHeight = 24.sp,
+                    maxLines = if (isWide) 3 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .padding(top = 12.dp, bottom = 20.dp),
+                )
+            }
+
+            // ── Buttons (site: btn-primary = WHITE bg / black text) ──────
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                HeroPrimaryButton(
+                    icon = Icons.Default.PlayArrow,
+                    text = "Watch Now",
+                    onClick = { onWatchClick(item) },
+                )
+                HeroSecondaryButton(
+                    icon = Icons.Default.Info,
+                    text = "More Info",
+                    onClick = { onAnimeClick(item) },
+                )
+            }
+        }
+    }
+}
+
 /** site: .meta-pill-blur — rounded-full border-white/15 bg-black/40 px-3 py-1 text-xs */
 @Composable
 private fun MetaPill(
@@ -461,7 +476,6 @@ private fun MetaPill(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .background(background)
-            .clickable(enabled = false) {}
             .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -580,86 +594,4 @@ private fun HeroArrowButton(icon: ImageVector, onClick: () -> Unit) {
             modifier = Modifier.size(20.dp),
         )
     }
-}
-
-/**
- * Hero background artwork with a candidate fallback chain:
- * fanart -> banner -> cover. On load error the next candidate loads; the
- * previous bitmap stays on screen until then (no black flash), and Coil's
- * crossfade keeps the switch smooth. Only when ALL candidates fail does a
- * dim placeholder color remain (never during normal swipes — neighbours
- * are preloaded).
- */
-@Composable
-private fun HeroArtwork(
-    fanart: String?,
-    banner: String?,
-    cover: String?,
-    contentDescription: String,
-) {
-    val candidates = remember(fanart, banner, cover) {
-        listOfNotNull(fanart, banner, cover)
-    }
-    val theme = LocalAnikageTheme.current
-    if (candidates.isEmpty()) {
-        Box(Modifier.fillMaxSize().background(theme.surfaceElevated))
-        return
-    }
-    var attempt by remember(candidates) { mutableIntStateOf(0) }
-    val url = candidates[attempt.coerceIn(0, candidates.lastIndex)]
-    AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(url)
-            .crossfade(220)
-            .memoryCacheKey(url)
-            .build(),
-        contentDescription = contentDescription,
-        contentScale = ContentScale.Crop,
-        onError = { if (attempt < candidates.lastIndex) attempt += 1 },
-        modifier = Modifier.fillMaxSize(),
-    )
-}
-
-/**
- * Muted, looping YouTube trailer layer — the site's autoplayHeroTrailer
- * setting: the spotlight slide's trailer plays full-bleed beneath the hero
- * gradient stack (youtube-nocookie iframe embed, no controls, muted,
- * looped), exactly like anikage.cc's hero.
- */
-@Composable
-private fun HeroTrailerLayer(
-    trailerId: String,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.ui.viewinterop.AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            android.webkit.WebView(ctx).apply {
-                settings.javaScriptEnabled = true
-                settings.mediaPlaybackRequiresUserGesture = false
-                settings.loadsImagesAutomatically = false
-                isClickable = false
-                // Transparent until the iframe paints — the artwork shows
-                // through instead of a black rectangle while YouTube loads.
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                webViewClient = object : android.webkit.WebViewClient() {
-                    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                        // Page finished: let the video layer show.
-                    }
-                }
-                loadUrl(
-                    "https://www.youtube-nocookie.com/embed/$trailerId" +
-                        "?autoplay=1&mute=1&loop=1&playlist=$trailerId" +
-                        "&controls=0&modestbranding=1&playsinline=1&rel=0&disablekb=1",
-                )
-            }
-        },
-        update = { view ->
-            val url = "https://www.youtube-nocookie.com/embed/$trailerId" +
-                "?autoplay=1&mute=1&loop=1&playlist=$trailerId" +
-                "&controls=0&modestbranding=1&playsinline=1&rel=0&disablekb=1"
-            if (view.url != url) view.loadUrl(url)
-        },
-        onRelease = { it.destroy() },
-    )
 }

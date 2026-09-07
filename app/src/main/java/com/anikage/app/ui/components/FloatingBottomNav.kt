@@ -19,7 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -120,11 +120,15 @@ fun FloatingBottomNav(
 
 private data class BottomItem(val route: String, val label: String, val icon: ImageVector)
 
-/** Site order: Home, Browse, Music, Schedule, Torrents. */
+/**
+ * v2.2.0 (directive #10/#13): Torrents removed; Subscriptions is the fifth
+ * tab — a bell with a check badge (NotificationsActive) reads clearly as
+ * "subscribe / track releases" without looking like a generic alarm.
+ */
 private fun bottomNavItems(): List<BottomItem> = listOf(
     BottomItem("home", "Home", Icons.Default.Home),
     BottomItem("browse", "Browse", Icons.Default.GridView),
     BottomItem("music", "Music", Icons.Default.MusicNote),
     BottomItem("schedule", "Schedule", Icons.Default.CalendarMonth),
-    BottomItem("torrents", "Torrents", Icons.Default.Link),
+    BottomItem("subscriptions", "Subscriptions", Icons.Default.NotificationsActive),
 )

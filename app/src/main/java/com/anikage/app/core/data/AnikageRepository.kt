@@ -21,6 +21,7 @@ import com.anikage.app.core.data.db.AnimeListEntity
 import com.anikage.app.core.data.db.DownloadedEpisodeEntity
 import com.anikage.app.core.data.db.DetailCacheEntity
 import com.anikage.app.core.data.db.RecentlyViewedEntity
+import com.anikage.app.core.data.db.SubscriptionEntity
 import com.anikage.app.core.data.db.WatchProgressEntity
 import com.anikage.app.core.data.model.AiringEpisode
 import com.anikage.app.core.data.model.AiringSchedule
@@ -753,28 +754,6 @@ class AnikageRepository private constructor(
         }
     }
 
-    /**
-     * Embed (E-server) sources — the site's E-Koto/E-Neko chips: the SAME
-     * sources endpoint with the embed key as provider; returns the embed
-     * options/urls to render in a WebView.
-     */
-    suspend fun anikageEmbedSources(
-        slug: String,
-        episode: Int,
-        embedKey: String,
-        lang: String,
-    ): Result<AnikageSourcesResponse> =
-        singleFlight("anikage:embeds:$slug:$episode:$embedKey:$lang", TTL_STREAM) {
-            val api = anikage
-                ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
-            try {
-                Result.success(api.sources(slug, episode, embedKey, lang))
-            } catch (e: Exception) {
-                AppLogger.w(LogCategory.DATA, "Embed sources failed for $slug ep $episode ($embedKey)", e)
-                Result.failure(e)
-            }
-        }
-
     /** Full HLS URL for the best source, or null when the provider chain fails. */
     suspend fun anikageStreamUrl(
         slug: String,
@@ -1032,6 +1011,123 @@ class AnikageRepository private constructor(
         withContext(Dispatchers.IO) {
             db.animeListDao().all()
         }
+
+    /** Settings -> Account -> Clear watch history: removes progress rows. */
+    suspend fun clearWatchData() = withContext(Dispatchers.IO) {
+        runCatching {
+            db.openHelper.writableDatabase.apply {
+                execSQL("DELETE FROM watch_progress")
+                execSQL("DELETE FROM recently_viewed")
+            }
+            AppLogger.i(LogCategory.DATA, "Watch history + progress cleared (user action)")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    //  Subscriptions (new-episode notifications) — user directive #12/#13
+    // -------------------------------------------------------------------------
+
+    /** Live anime info by slug (used by the subscription checker). */
+    suspend fun animeInfoBySlug(slug: String): AnikageInfoAnime? = withContext(Dispatchers.IO) {
+        runCatching { anikage?.animeInfo(slug)?.anime }.getOrNull()
+    }
+
+    fun observeSubscriptions(): Flow<List<SubscriptionEntity>> = db.subscriptionDao().observeAll()
+
+    suspend fun allSubscriptions(): List<SubscriptionEntity> =
+        withContext(Dispatchers.IO) { db.subscriptionDao().all() }
+
+    suspend fun getSubscription(animeId: Int): SubscriptionEntity? =
+        withContext(Dispatchers.IO) { db.subscriptionDao().get(animeId) }
+
+    /**
+     * Subscribe: baseline episode count comes from the live info payload so
+     * only FUTURE releases notify (never a notification for episodes that
+     * existed before the user subscribed).
+     */
+    suspend fun subscribe(
+        animeId: Int,
+        slug: String?,
+        titleRomaji: String?,
+        titleEnglish: String?,
+        posterUrl: String?,
+        coverColor: String?,
+        status: String?,
+        knownEpisodes: Int,
+        nextAiringEpisode: Int?,
+    ) = withContext(Dispatchers.IO) {
+        val current = db.subscriptionDao().get(animeId)
+        val baseline = current?.lastNotifiedEpisode ?: maxOf(knownEpisodes, 0)
+        db.subscriptionDao().upsert(
+            SubscriptionEntity(
+                animeId = animeId,
+                slug = slug,
+                titleRomaji = titleRomaji,
+                titleEnglish = titleEnglish,
+                posterUrl = posterUrl,
+                coverColor = coverColor,
+                releaseStatus = status,
+                lastKnownEpisodes = knownEpisodes,
+                lastNotifiedEpisode = baseline,
+                nextAiringEpisode = nextAiringEpisode,
+                subscribedAt = current?.subscribedAt ?: System.currentTimeMillis(),
+                lastCheckedAt = System.currentTimeMillis(),
+            )
+        )
+    }
+
+    suspend fun unsubscribe(animeId: Int) = withContext(Dispatchers.IO) {
+        db.subscriptionDao().delete(animeId)
+    }
+
+    /** Record a notification + the fresh baseline (called by the worker). */
+    suspend fun markSubscriptionNotified(
+        animeId: Int,
+        episode: Int,
+        episodeCount: Int,
+        nextAiring: Int?,
+        status: String?,
+    ) = withContext(Dispatchers.IO) {
+        db.subscriptionDao().updateCheck(animeId, episodeCount, episode, nextAiring, status, System.currentTimeMillis())
+    }
+
+    /** Silent baseline refresh (no new episodes found). */
+    suspend fun updateSubscriptionCheck(
+        animeId: Int,
+        episodeCount: Int,
+        nextAiring: Int?,
+        status: String?,
+    ) = withContext(Dispatchers.IO) {
+        db.subscriptionDao().get(animeId)?.let { current ->
+            db.subscriptionDao().updateCheck(
+                animeId, episodeCount, current.lastNotifiedEpisode, nextAiring, status,
+                System.currentTimeMillis(),
+            )
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    //  Comment posting (requires a real auth session)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Post a comment for an episode through the site's own API. Returns
+     * the created comment on success; on 401 the caller offers sign-in.
+     */
+    suspend fun postComment(
+        animeId: Int,
+        slug: String?,
+        episode: Int,
+        content: String,
+        isSpoiler: Boolean = false,
+        aniTitle: String? = null,
+        aniImage: String? = null,
+    ): Result<AnikageComment> = withContext(Dispatchers.IO) {
+        val client = anikage ?: return@withContext Result.failure(
+            IllegalStateException("Anikage API not configured"),
+        )
+        client.postComment(animeId, slug, episode, content, isSpoiler, aniTitle, aniImage)
+    }
 
     // -------------------------------------------------------------------------
     //  Singleton access

@@ -104,3 +104,29 @@ data class AnimeListEntity(
     val coverColor: String?,
     val updatedAt: Long = System.currentTimeMillis(),
 )
+
+/**
+ * A subscription — the user asked to be notified when this anime's next
+ * episode drops. [SubscriptionWorker] checks each row against the live
+ * Anikage info API and posts a local notification when the episode count
+ * grows past [lastKnownEpisodes] (deduped via [lastNotifiedEpisode]).
+ */
+@Entity(tableName = "subscriptions")
+data class SubscriptionEntity(
+    @PrimaryKey val animeId: Int,
+    val slug: String?,
+    val titleRomaji: String?,
+    val titleEnglish: String?,
+    val posterUrl: String?,
+    val coverColor: String?,
+    /** RELEASING / FINISHED / NOT_YET_RELEASED / CANCELLED at subscribe time. */
+    val releaseStatus: String?,
+    /** Episode count when the user subscribed (baseline for new-episode detection). */
+    val lastKnownEpisodes: Int,
+    /** Highest episode a notification was already sent for (dedupe). */
+    val lastNotifiedEpisode: Int,
+    /** Next airing episode number at the last check, if any. */
+    val nextAiringEpisode: Int?,
+    val subscribedAt: Long = System.currentTimeMillis(),
+    val lastCheckedAt: Long = 0L,
+)
