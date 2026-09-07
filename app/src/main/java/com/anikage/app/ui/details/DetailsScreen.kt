@@ -610,7 +610,7 @@ fun DetailsScreen(
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(theme.action)
                                         .clickable(enabled = selectedEpisodes.isNotEmpty()) {
-                                            downloadEpisodes(context, viewModel, state, selectedEpisodes.toList())
+                                            downloadEpisodes(context, viewModel, state, animeId, selectedEpisodes.toList())
                                             selectionMode = false
                                             selectedEpisodes = emptySet()
                                         }
@@ -892,6 +892,7 @@ private fun downloadEpisodes(
     context: android.content.Context,
     viewModel: DetailsViewModel,
     state: DetailsUiState,
+    animeId: Int,
     episodes: List<Int>,
 ) {
     val slug = state.slug ?: return
@@ -899,12 +900,12 @@ private fun downloadEpisodes(
     val repo = AnikageRepository.get(context)
     val height = SettingsState.downloadQualityHeight
     kotlinx.coroutines.MainScope().launch {
-        val existing = repo.downloadedForAnime(state.details?.id ?: 0).map { it.episode }.toSet()
+        val existing = repo.downloadedForAnime(animeId).map { it.episode }.toSet()
         episodes.filter { it !in existing }.forEach { ep ->
             EpisodeDownloadEngine.enqueue(
                 context,
                 EpisodeDownloadEngine.DownloadRequest(
-                    animeId = details?.id ?: 0,
+                    animeId = animeId,
                     slug = slug,
                     episode = ep,
                     provider = com.anikage.app.Config.DEFAULT_STREAM_PROVIDER,
