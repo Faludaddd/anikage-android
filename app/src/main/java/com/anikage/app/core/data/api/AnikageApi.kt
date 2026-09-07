@@ -11,6 +11,9 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.serialization.encodeToString
 
 /**
  * Low-level REST client for Anikage's own API (anikage.cc + auth.anikage.cc).
@@ -189,11 +192,14 @@ class AnikageApi(
         provider: String = Config.DEFAULT_STREAM_PROVIDER,
         lang: String = Config.DEFAULT_STREAM_LANG,
         server: String? = null,
+        /** The site's "Fix it / Refetch a fresh stream" — bypasses the server cache. */
+        refresh: Boolean = false,
     ): AnikageSourcesResponse {
         val url = url(base, "/api/media/anime/$slug/episodes/$episode/sources") {
             param("provider", provider)
             param("lang", lang)
             param("server", server)
+            param("refresh", if (refresh) "1" else null)
         }
         return json.decodeFromString(get(url))
     }
@@ -260,6 +266,87 @@ class AnikageApi(
         val auth = authBase ?: return AnikageViewsResponse()
         val url = url(auth, "/api/views/anime/$slug/episode/$episode/views")
         return json.decodeFromString(get(url))
+    }
+
+    /**
+     * Record an episode view — the exact call the site's player fires once
+     * per episode: POST {auth}/api/views/anime/{slug}/episode/{n}/view with
+     * body { aniId } (the AniList id). Returns `counted` / `ignored`.
+     */
+    suspend fun recordView(slug: String, episode: Int, aniId: Int): Boolean {
+        val auth = authBase ?: return false
+        val url = url(auth, "/api/views/anime/$slug/episode/$episode/view")
+        val response = json.decodeFromString<AnikageViewPostResponse>(
+            post(url, """{"aniId":"$aniId"}"""),
+        )
+        return response.status == "counted"
+    }
+
+    /**
+     * Download links — GET {base}/api/media/anime/{slug}/episodes/{n}/downloads
+     * (the site's Download episode dialog; links to the provider's download
+     * pages, grouped by audio + resolution).
+     */
+    suspend fun downloads(slug: String, episode: Int): AnikageDownloadsResponse {
+        val url = url(base, "/api/media/anime/$slug/episodes/$episode/downloads")
+        return json.decodeFromString(get(url))
+    }
+
+    /**
+     * Report an episode problem — POST {base}/api/media/anime/{slug}/report
+     * with { type, provider, episode, note } (the site's report dialog).
+     */
+    suspend fun report(
+        slug: String,
+        type: String,
+        provider: String? = null,
+        episode: Int? = null,
+        note: String? = null,
+    ) {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("type", kotlinx.serialization.json.JsonPrimitive(type))
+            provider?.let { put("provider", kotlinx.serialization.json.JsonPrimitive(it)) }
+            episode?.let { put("episode", kotlinx.serialization.json.JsonPrimitive(it)) }
+            note?.takeIf { it.isNotBlank() }?.let { put("note", kotlinx.serialization.json.JsonPrimitive(it)) }
+        }
+        post(url(base, "/api/media/anime/$slug/report"), body.toString())
+    }
+
+    /** Logged POST returning the raw body (throws on non-2xx). */
+    private suspend fun post(url: String, jsonBody: String): String = withContext(Dispatchers.IO) {
+        val started = System.currentTimeMillis()
+        AppLogger.d(LogCategory.NETWORK, "Anikage -> POST $url")
+        try {
+            val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
+            val request = Request.Builder()
+                .url(url)
+                .post(jsonBody.toRequestBody(mediaType))
+                .addHeader("User-Agent", Config.Network.USER_AGENT)
+                .addHeader("Accept", "application/json")
+                .addHeader("Referer", "${Config.ANIKAGE_SITE_ORIGIN}/")
+                .addHeader("Origin", Config.ANIKAGE_SITE_ORIGIN)
+                .build()
+            val raw = client.newCall(request).execute().use { response ->
+                val body = response.body?.string()
+                    ?: throw IOException("Empty response body")
+                if (!response.isSuccessful) {
+                    throw IOException("HTTP ${response.code}: ${body.take(120)}")
+                }
+                body
+            }
+            AppLogger.d(
+                LogCategory.NETWORK,
+                "Anikage <- 200 (${System.currentTimeMillis() - started}ms, ${raw.length} bytes)",
+            )
+            raw
+        } catch (e: Exception) {
+            AppLogger.e(
+                LogCategory.NETWORK,
+                "Anikage FAILED POST $url (${System.currentTimeMillis() - started}ms)",
+                e,
+            )
+            throw e
+        }
     }
 
     // ---------------------------------------------------------------------

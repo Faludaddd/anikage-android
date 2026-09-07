@@ -305,9 +305,9 @@ private fun SessionLogViewer(seq: Int, onBack: () -> Unit) {
     val filtered = remember(liveEntries, storedEntries, query, levelFilter, isCurrent) {
         val source: List<LogTuple> =
             if (isCurrent) {
-                liveEntries.map { LogTuple(it.id, it.level, it.category.label, it.message, it.error, it.timestamp) }
+                liveEntries.map { LogTuple(it.id, it.level, it.category.label, it.message, it.error, it.timestamp, it.repeat) }
             } else {
-                storedEntries.map { LogTuple(it.id, runCatching { LogLevel.valueOf(it.level) }.getOrDefault(LogLevel.INFO), it.category, it.message, it.error, it.ts) }
+                storedEntries.map { LogTuple(it.id, runCatching { LogLevel.valueOf(it.level) }.getOrDefault(LogLevel.INFO), it.category, it.message, it.error, it.ts, 0) }
             }
         source.filter { entry ->
             (levelFilter == null || entry.level == levelFilter) &&
@@ -440,7 +440,7 @@ private fun SessionLogViewer(seq: Int, onBack: () -> Unit) {
                         ts = entry.timestamp,
                         level = entry.level,
                         category = entry.category,
-                        message = entry.message,
+                        message = if (entry.repeat > 0) "${entry.message} (×${entry.repeat + 1})" else entry.message,
                         error = entry.error,
                         expanded = expandedId == entry.id,
                         onToggle = { expandedId = if (expandedId == entry.id) null else entry.id },
@@ -655,5 +655,5 @@ private fun LogRow(
 /** Helper tuple for the filter pipeline. */
 private data class LogTuple(
     val id: Long, val level: LogLevel, val category: String,
-    val message: String, val error: String?, val timestamp: Long,
+    val message: String, val error: String?, val timestamp: Long, val repeat: Int,
 )

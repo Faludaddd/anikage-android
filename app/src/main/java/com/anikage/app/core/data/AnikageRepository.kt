@@ -397,6 +397,7 @@ class AnikageRepository private constructor(
                     query = query, sort = sort, page = page, limit = limit,
                     genres = genres, season = season, year = year,
                     format = format, status = status, country = country,
+                    adult = com.anikage.app.core.settings.SettingsState.showAdultContent,
                 )
                 val items = response.data.map { it.toAnime() }.distinctBy { it.id to it.displayTitle() }
                 if (items.isNotEmpty() || page > 1) {
@@ -486,7 +487,12 @@ class AnikageRepository private constructor(
         val ak = anikage
         if (ak != null) {
             try {
-                val response = ak.browse(query = query, page = page, limit = perPage)
+                val response = ak.browse(
+                    query = query,
+                    page = page,
+                    limit = perPage,
+                    adult = com.anikage.app.core.settings.SettingsState.showAdultContent,
+                )
                 val items = response.data.map { it.toAnime() }
                 if (items.isNotEmpty()) {
                     cacheAll(items)
@@ -711,8 +717,19 @@ class AnikageRepository private constructor(
         episode: Int,
         provider: String = Config.DEFAULT_STREAM_PROVIDER,
         lang: String = Config.DEFAULT_STREAM_LANG,
-    ): Result<AnikageSourcesResponse> =
-        singleFlight("anikage:sources:$slug:$episode:$provider:$lang", TTL_STREAM) {
+        refresh: Boolean = false,
+    ): Result<AnikageSourcesResponse> {
+        // refresh=1 must always hit the network (site's "Fix it" flow).
+        if (refresh) {
+            val api = anikage ?: return Result.failure(IllegalStateException("Anikage API disabled"))
+            return try {
+                Result.success(api.sources(slug, episode, provider, lang, null, true))
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Sources refresh failed for $slug ep $episode", e)
+                Result.failure(e)
+            }
+        }
+        return singleFlight("anikage:sources:$slug:$episode:$provider:$lang", TTL_STREAM) {
             val api = anikage
                 ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
             try {
@@ -729,6 +746,29 @@ class AnikageRepository private constructor(
                 Result.success(response)
             } catch (e: Exception) {
                 AppLogger.w(LogCategory.DATA, "Sources failed for $slug ep $episode", e)
+                Result.failure(e)
+            }
+        }
+    }
+
+    /**
+     * Embed (E-server) sources — the site's E-Koto/E-Neko chips: the SAME
+     * sources endpoint with the embed key as provider; returns the embed
+     * options/urls to render in a WebView.
+     */
+    suspend fun anikageEmbedSources(
+        slug: String,
+        episode: Int,
+        embedKey: String,
+        lang: String,
+    ): Result<AnikageSourcesResponse> =
+        singleFlight("anikage:embeds:$slug:$episode:$embedKey:$lang", TTL_STREAM) {
+            val api = anikage
+                ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
+            try {
+                Result.success(api.sources(slug, episode, embedKey, lang))
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Embed sources failed for $slug ep $episode ($embedKey)", e)
                 Result.failure(e)
             }
         }
@@ -753,6 +793,22 @@ class AnikageRepository private constructor(
      * subTypes) so the watch screen can disable servers that don't offer the
      * current SUB/DUB language, exactly like the site's server panel.
      */
+    /** Servers + embeds (E-server chips) — the raw servers response. */
+    suspend fun anikageServersResponse(
+        slug: String,
+        episode: Int,
+    ): Result<com.anikage.app.core.data.api.AnikageServersResponse> =
+        singleFlight("anikage:servers2:$slug:$episode", TTL_LIST) {
+            val api = anikage
+                ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
+            try {
+                Result.success(api.servers(slug, episode))
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Servers failed for $slug ep $episode", e)
+                Result.failure(e)
+            }
+        }
+
     suspend fun anikageServers(slug: String, episode: Int): Result<List<AnikageServer>> =
         singleFlight("anikage:servers:$slug:$episode", TTL_LIST) {
             val api = anikage
@@ -826,6 +882,53 @@ class AnikageRepository private constructor(
                 null
             }
         }
+
+    /**
+     * Record an episode view (the site player's once-per-episode POST).
+     * Returns true when the server counted it; failures are silent (the
+     * site itself just disables retries for the session).
+     */
+    suspend fun anikageRecordView(slug: String, episode: Int, aniId: Int): Boolean =
+        try {
+            anikage?.recordView(slug, episode, aniId) == true
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.DATA, "Record view failed for $slug ep $episode", e)
+            false
+        }
+
+    /** Download links for an episode (the site's Download dialog). */
+    suspend fun anikageDownloads(
+        slug: String,
+        episode: Int,
+    ): Result<com.anikage.app.core.data.api.AnikageDownloadsResponse> =
+        singleFlight("anikage:downloads:$slug:$episode", TTL_STREAM) {
+            val api = anikage
+                ?: return@singleFlight Result.failure(IllegalStateException("Anikage API disabled"))
+            try {
+                Result.success(api.downloads(slug, episode))
+            } catch (e: Exception) {
+                AppLogger.w(LogCategory.DATA, "Downloads failed for $slug ep $episode", e)
+                Result.failure(e)
+            }
+        }
+
+    /** Report an episode problem (the site's Report dialog POST). */
+    suspend fun anikageReport(
+        slug: String,
+        type: String,
+        provider: String? = null,
+        episode: Int? = null,
+        note: String? = null,
+    ): Result<Unit> {
+        val api = anikage ?: return Result.failure(IllegalStateException("Anikage API disabled"))
+        return try {
+            api.report(slug, type, provider, episode, note)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            AppLogger.w(LogCategory.DATA, "Report failed for $slug ($type)", e)
+            Result.failure(e)
+        }
+    }
 
     // -------------------------------------------------------------------------
     //  Continue Watching — recently viewed anime

@@ -173,6 +173,8 @@ data class AnikageEmbedRef(
     val id: String? = null,
     val key: String? = null,
     val label: String? = null,
+    /** Direct embed player URL (embedOptions entries carry it). */
+    val url: String? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -240,6 +242,37 @@ data class AnikageViewsResponse(
     val epNum: Int? = null,
     val viewCount: Long? = null,
 )
+
+/** POST …/view body response — { status: "counted" | "ignored" }. */
+@Serializable
+data class AnikageViewPostResponse(
+    val status: String? = null,
+)
+
+// ---------------------------------------------------------------------------
+//  Downloads — GET /api/media/anime/{slug}/episodes/{n}/downloads
+//  (the site's "Download episode" dialog data)
+// ---------------------------------------------------------------------------
+
+@Serializable
+data class AnikageDownloadsResponse(
+    val slug: String? = null,
+    val number: Int? = null,
+    val providerId: String? = null,
+    val downloads: List<AnikageDownloadLink> = emptyList(),
+)
+
+@Serializable
+data class AnikageDownloadLink(
+    val downloadPageUrl: String? = null,
+    val url: String? = null,
+    val resolution: String? = null,
+    /** sub | dub | raw. */
+    val audio: String? = null,
+    val size: String? = null,
+) {
+    val link: String? get() = downloadPageUrl ?: url
+}
 
 // ---------------------------------------------------------------------------
 //  Comments — GET auth.anikage.cc/api/comments
@@ -319,7 +352,9 @@ data class AnikageMusicAnime(
     val resources: List<AnikageMusicResource> = emptyList(),
 ) {
     fun coverUrl(): String? = images.firstOrNull { it.link != null }?.link
-    fun anilistId(): Int? = resources.firstOrNull()?.externalId
+    fun anilistId(): Int? = resources
+        .firstOrNull { it.site == null || it.site.equals("Anilist", ignoreCase = true) }
+        ?.externalId ?: resources.firstOrNull()?.externalId
 }
 
 @Serializable

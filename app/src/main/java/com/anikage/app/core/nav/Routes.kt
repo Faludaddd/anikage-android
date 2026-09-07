@@ -15,7 +15,6 @@ package com.anikage.app.core.nav
  *   /anime/watch/{id}    -> Native player (carries the Anikage slug when
  *                           known, so sources load without a title search)
  *   /music/info          -> Anime music player (site: /music/info?slug&type)
- *   /schedule/details    -> Airing details (schedule entry -> rich page)
  *   /settings            -> App settings (Account/General/Player/Themes/About)
  *   /notifications       -> Notification center (site /(account)/notifications)
  *   /diagnostics         -> In-app session logs (app-only; the site has no equivalent)
@@ -23,7 +22,8 @@ package com.anikage.app.core.nav
  */
 object Routes {
     const val HOME = "home"
-    const val BROWSE = "browse"
+    const val BROWSE = "browse?sort={sort}"
+    fun browse(sort: String? = null): String = if (sort.isNullOrBlank()) "browse?sort=popularity" else "browse?sort=$sort"
     const val SCHEDULE = "schedule"
     const val SEARCH = "search"
     const val MUSIC = "music"
@@ -32,29 +32,32 @@ object Routes {
     const val NOTIFICATIONS = "notifications"
     const val DIAGNOSTICS = "diagnostics"
     const val ABOUT = "about"
+    const val DMCA = "dmca"
 
     const val DETAILS = "details/{id}"
     fun details(id: Int) = "details/$id"
 
     /** Watch — `slug` is optional (query param) so old links still work. */
     const val WATCH = "watch/{id}?ep={episode}&slug={slug}"
-    fun watch(id: Int, episode: Int = 1, slug: String? = null): String =
+
+    /**
+     * episode = 0 means AUTO-RESUME: the watch screen continues from the
+     * user's saved progress (the site's /anime/watch/{slug} behaviour when
+     * no ?ep= is given). Any positive value pins that exact episode
+     * (schedule entries, episode rows, "next episode").
+     */
+    fun watch(id: Int, episode: Int, slug: String? = null): String =
         "watch/$id?ep=$episode" + (slug?.let { "&slug=$it" } ?: "")
 
     /** Music info player — site: /music/info?slug={slug}&type={OP1|ED1…}. */
     const val MUSIC_INFO = "music_info/{slug}?type={type}"
     fun musicInfo(slug: String, type: String) = "music_info/$slug?type=$type"
 
-    /** Schedule entry -> rich airing details page (app-owned, site n/a). */
-    const val SCHEDULE_DETAILS = "schedule_details/{id}?ep={episode}&airingAt={airingAt}"
-    fun scheduleDetails(id: Int, episode: Int, airingAt: Long) =
-        "schedule_details/$id?ep=$episode&airingAt=$airingAt"
-
-    /** Bottom nav — exact site set + order: Home, Browse, Music, Schedule, Torrents. */
+    /** Bottom nav — exact site set + order: Home, Browse, Music, Schedule, Torrents
+     *  (base routes, no query patterns, for visibility checks). */
     val bottomNav: List<String> = listOf(
-        HOME, BROWSE, MUSIC, SCHEDULE, TORRENTS,
+        HOME, BROWSE.substringBefore('?'), MUSIC, SCHEDULE, TORRENTS,
     )
-
     /** Routes that show the top app bar (logo + search + bell + profile). */
     val topBarScreens: List<String> = listOf(
         HOME, BROWSE, SCHEDULE, SEARCH, MUSIC, TORRENTS, DETAILS, WATCH,
@@ -62,6 +65,6 @@ object Routes {
 
     /** Account pages use their own back headers (site: /(account) layout). */
     val accountScreens: List<String> = listOf(
-        SETTINGS, NOTIFICATIONS,
+        SETTINGS, NOTIFICATIONS, ABOUT, DMCA,
     )
 }

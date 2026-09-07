@@ -6,6 +6,38 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+/**
+ * Caption styling — the same knobs the site's Caption Styles panel exposes
+ * (size / color / opacity / weight / shadow / backgrounds). Stored as one
+ * JSON blob in prefs.
+ */
+@Serializable
+data class CaptionStyles(
+    /** Text size scale 0.5..2.0 (site: fontSize). */
+    val fontSize: Float = 1.0f,
+    /** Cue text color (site: textColor). */
+    val textColor: Long = 0xFFFFFFFF,
+    /** Cue text opacity (site: textOpacity). */
+    val textOpacity: Float = 1.0f,
+    /** Per-cue background color (site: textBg). */
+    val textBg: Long = 0xFF000000,
+    /** Per-cue background opacity (site: textBgOpacity). */
+    val textBgOpacity: Float = 0.6f,
+    /** Full display background color (site: displayBg). */
+    val displayBg: Long = 0xFF000000,
+    /** Full display background opacity (site: displayBgOpacity). */
+    val displayBgOpacity: Float = 0.0f,
+    /** 400 normal | 700 bold (site: fontWeight Bold/None). */
+    val fontWeight: Int = 400,
+    /** Text shadow on/off (site: textShadow). */
+    val textShadow: Boolean = true,
+    /** Text border/outline on/off (site: textBorder). */
+    val textBorder: Boolean = false,
+)
 
 /**
  * Runtime, persisted app settings — the same keys the Anikage site stores
@@ -18,6 +50,7 @@ import androidx.compose.runtime.setValue
 object SettingsState {
 
     private const val PREFS = "anikage_settings"
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     // ── General ───────────────────────────────────────────────────────────
     /** Don't save watch history / list changes (site: incognito). */
@@ -78,6 +111,12 @@ object SettingsState {
     /** Verbose logging (diagnostics). */
     var verboseLogging by mutableStateOf(false)
 
+    /** Last selected playback speed (site: playbackRate). */
+    var playbackRate by mutableFloatStateOf(1.0f)
+
+    /** Player caption styling (site: captionStyles). */
+    var captionStyles by mutableStateOf(CaptionStyles())
+
     // ── lifecycle ─────────────────────────────────────────────────────────
 
     fun init(context: Context) {
@@ -101,6 +140,10 @@ object SettingsState {
         episodeSortOrder = p.getString("episodeSortOrder", "asc") ?: "asc"
         streamLang = p.getString("streamLang", "sub") ?: "sub"
         verboseLogging = p.getBoolean("verboseLogging", false)
+        playbackRate = p.getFloat("playbackRate", 1.0f)
+        captionStyles = p.getString("captionStyles", null)
+            ?.let { runCatching { json.decodeFromString<CaptionStyles>(it) }.getOrNull() }
+            ?: CaptionStyles()
     }
 
     private fun save(context: Context, block: android.content.SharedPreferences.Editor.() -> Unit) {
@@ -127,6 +170,11 @@ object SettingsState {
     fun setVolume(context: Context, v: Float) { volume = v; save(context) { putFloat("volume", v) } }
     fun setEpisodeSortOrder(context: Context, v: String) { episodeSortOrder = v; save(context) { putString("episodeSortOrder", v) } }
     fun setStreamLang(context: Context, v: String) { streamLang = v; save(context) { putString("streamLang", v) } }
+    fun setPlaybackRate(context: Context, v: Float) { playbackRate = v; save(context) { putFloat("playbackRate", v) } }
+    fun setCaptionStyles(context: Context, v: CaptionStyles) {
+        captionStyles = v
+        save(context) { putString("captionStyles", json.encodeToString(v)) }
+    }
     fun setVerboseLogging(context: Context, v: Boolean) {
         verboseLogging = v
         save(context) { putBoolean("verboseLogging", v) }

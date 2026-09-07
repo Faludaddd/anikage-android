@@ -48,6 +48,7 @@ import com.anikage.app.core.log.SessionLogger
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.ui.about.AboutScreen
+import com.anikage.app.ui.about.DmcaScreen
 import com.anikage.app.ui.browse.BrowseScreen
 import com.anikage.app.ui.components.FloatingBottomNav
 import com.anikage.app.ui.components.FloatingTopBar
@@ -57,7 +58,6 @@ import com.anikage.app.ui.music.MusicInfoScreen
 import com.anikage.app.ui.music.MusicScreen
 import com.anikage.app.ui.notifications.NotificationsScreen
 import com.anikage.app.ui.player.WatchScreen
-import com.anikage.app.ui.schedule.ScheduleDetailScreen
 import com.anikage.app.ui.schedule.ScheduleScreen
 import com.anikage.app.ui.search.SearchScreen
 import com.anikage.app.ui.settings.DiagnosticsScreen
@@ -73,8 +73,10 @@ fun AnikageApp() {
     // Site: the fixed top nav floats over EVERY content page (home, browse,
     // schedule, music, torrents, info, watch). Account pages (settings,
     // profile, notifications) use their own back headers instead.
-    val showTopBar = currentRoute !in Routes.accountScreens && currentRoute != Routes.DIAGNOSTICS && currentRoute != Routes.ABOUT
-    val showBottomNav = currentRoute in Routes.bottomNav
+    // Compare base routes so pattern routes (browse?sort={sort}) match.
+    val currentBase = currentRoute?.substringBefore('?')
+    val showTopBar = currentBase !in Routes.accountScreens && currentBase != Routes.DIAGNOSTICS && currentBase != Routes.ABOUT
+    val showBottomNav = currentBase in Routes.bottomNav
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -90,31 +92,60 @@ fun AnikageApp() {
             ) {
                 composable(Routes.HOME) {
                     HomeScreen(
+                        // Unified flow (user spec): anime selections open the
+                        // SAME watch/player experience; ep=0 auto-resumes from
+                        // saved progress (site: /anime/watch/{slug}). The hero's
+                        // "More Info" keeps the info page (site 1:1).
                         onAnimeClick = { anime ->
                             AnimePreviewStore.put(anime)
                             navController.navigate(Routes.details(anime.id))
+                        },
+                        onCardClick = { anime ->
+                            AnimePreviewStore.put(anime)
+                            navController.navigate(Routes.watch(anime.id, 0, anime.slug))
                         },
                         onWatchClick = { anime ->
                             AnimePreviewStore.put(anime)
-                            navController.navigate(Routes.watch(anime.id, 1, anime.slug))
+                            navController.navigate(Routes.watch(anime.id, 0, anime.slug))
                         },
-                        onSeeAllClick = { navController.navigate(Routes.BROWSE) },
+                        onSeeAllClick = { section ->
+                            // Site: View All carries section context (sort).
+                            val sort = when (section) {
+                                "trending" -> "trending"
+                                "favorite" -> "favourites"
+                                "upcoming" -> "newest"
+                                else -> "popularity"
+                            }
+                            navController.navigate(Routes.browse(sort))
+                        },
                     )
                 }
-                composable(Routes.BROWSE) {
+                composable(
+                    Routes.BROWSE,
+                    arguments = listOf(
+                        androidx.navigation.navArgument("sort") {
+                            type = androidx.navigation.NavType.StringType
+                            defaultValue = "popularity"
+                        },
+                    ),
+                ) { entry ->
                     BrowseScreen(
+                        initialSort = entry.arguments?.getString("sort"),
                         onAnimeClick = { anime ->
                             AnimePreviewStore.put(anime)
-                            navController.navigate(Routes.details(anime.id))
+                            navController.navigate(Routes.watch(anime.id, 0, anime.slug))
                         },
                     )
                 }
                 composable(Routes.SCHEDULE) {
                     ScheduleScreen(
+                        // Site: schedule entries link into the anime pages;
+                        // the app opens the watch screen AT that episode —
+                        // the one unified player experience (ep pinned).
                         onEntryClick = { schedule ->
                             AnimePreviewStore.put(schedule.media)
                             navController.navigate(
-                                Routes.scheduleDetails(schedule.media.id, schedule.episode, schedule.airingAt)
+                                Routes.watch(schedule.media.id, schedule.episode, schedule.media.slug),
                             )
                         },
                     )
@@ -123,7 +154,7 @@ fun AnikageApp() {
                     SearchScreen(
                         onAnimeClick = { anime ->
                             AnimePreviewStore.put(anime)
-                            navController.navigate(Routes.details(anime.id))
+                            navController.navigate(Routes.watch(anime.id, 0, anime.slug))
                         },
                         onBackClick = { navController.popBackStack() },
                     )
@@ -150,6 +181,7 @@ fun AnikageApp() {
                     SettingsScreen(
                         onBackClick = { navController.popBackStack() },
                         onOpenDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
+                        onOpenDmca = { navController.navigate(Routes.DMCA) },
                     )
                 }
                 composable(Routes.DIAGNOSTICS) {
@@ -167,7 +199,7 @@ fun AnikageApp() {
                         onBackClick = { navController.popBackStack() },
                         onAnimeClick = { anime ->
                             AnimePreviewStore.put(anime)
-                            navController.navigate(Routes.details(anime.id))
+                            navController.navigate(Routes.watch(anime.id, 0, anime.slug))
                         },
                         onWatchClick = { aId, ep, slug ->
                             navController.navigate(Routes.watch(aId, ep, slug))
@@ -192,6 +224,10 @@ fun AnikageApp() {
                         initialEpisode = ep,
                         slug = slug,
                         onBackClick = { navController.popBackStack() },
+                        onOpenInfo = { infoId ->
+                            AnimePreviewStore.byId(infoId)?.let { AnimePreviewStore.put(it) }
+                            navController.navigate(Routes.details(infoId))
+                        },
                     )
                 }
                 composable(
@@ -207,38 +243,21 @@ fun AnikageApp() {
                         slug = slug,
                         type = type,
                         onBackClick = { navController.popBackStack() },
-                    )
-                }
-                composable(
-                    route = Routes.SCHEDULE_DETAILS,
-                    arguments = listOf(
-                        navArgument("id") { type = NavType.IntType },
-                        navArgument("episode") { type = NavType.IntType; defaultValue = 1 },
-                        navArgument("airingAt") { type = NavType.LongType; defaultValue = 0L },
-                    ),
-                ) { backStackEntry ->
-                    val id = backStackEntry.arguments?.getInt("id") ?: return@composable
-                    val ep = backStackEntry.arguments?.getInt("episode") ?: 1
-                    val airingAt = backStackEntry.arguments?.getLong("airingAt") ?: 0L
-                    ScheduleDetailScreen(
-                        animeId = id,
-                        episode = ep,
-                        airingAt = airingAt,
-                        onBackClick = { navController.popBackStack() },
-                        onWatchClick = { aId, aEp, slug ->
-                            navController.navigate(Routes.watch(aId, aEp, slug))
-                        },
-                        onViewAnime = { aId ->
-                            // The schedule entry seeded the preview store; use
-                            // it (with its slug) so the info page opens via the
-                            // Anikage path without needing AniList.
-                            AnimePreviewStore.byId(aId)?.let { navController.navigate(Routes.details(it.id)) }
-                                ?: navController.navigate(Routes.details(aId))
+                        onOpenAnime = { anilistId ->
+                            val preview = AnimePreviewStore.byId(anilistId)
+                            navController.navigate(Routes.watch(anilistId, 0, preview?.slug))
                         },
                     )
                 }
                 composable(Routes.ABOUT) {
-                    AboutScreen()
+                    AboutScreen(
+                        onOpenDmca = { navController.navigate(Routes.DMCA) },
+                    )
+                }
+                composable(Routes.DMCA) {
+                    DmcaScreen(
+                        onBackClick = { navController.popBackStack() },
+                    )
                 }
             }
 

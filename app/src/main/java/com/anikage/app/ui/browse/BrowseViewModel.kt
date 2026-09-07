@@ -55,9 +55,12 @@ data class BrowseUiState(
 @OptIn(FlowPreview::class)
 class BrowseViewModel(
     private val repo: AnikageRepository,
+    initialSort: String? = null,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(BrowseUiState())
+    private val _state = MutableStateFlow(
+        BrowseUiState(filters = BrowseFilters(sort = initialSort ?: "popularity")),
+    )
     val state: StateFlow<BrowseUiState> = _state.asStateFlow()
 
     /** Search text debounced like the site's live search (300ms). */
@@ -68,9 +71,10 @@ class BrowseViewModel(
     init {
         viewModelScope.launch {
             queryFlow.debounce(300).distinctUntilChanged().collect { q ->
-                if (q != _state.value.filters.query) {
-                    applyFilters(_state.value.filters.copy(query = q))
-                }
+                // The DEBOUNCED fetch path for search text (site: live search).
+                // setQuery only updates the flow; the applied filters update
+                // here so typing never double-fires.
+                applyFilters(_state.value.filters.copy(query = q))
             }
         }
         load()
@@ -78,18 +82,23 @@ class BrowseViewModel(
 
     fun load() = applyFilters(_state.value.filters)
 
+    /**
+     * Search text — display state updates instantly, the FETCH is debounced
+     * (300ms) through [queryFlow]. Screens keep the typed text in a local
+     * state so the input never waits for the debounce.
+     */
     fun setQuery(query: String) {
         queryFlow.value = query
-        _state.value = _state.value.copy(filters = _state.value.filters.copy(query = query))
     }
 
     fun setFilters(filters: BrowseFilters) {
-        // Search box drives its own debounced reload; everything else reloads now.
-        applyFilters(filters.copy(query = _state.value.filters.query))
+        // Non-query changes reload immediately WITH the current typed query
+        // (the site applies filters + search text together).
+        applyFilters(filters.copy(query = queryFlow.value))
     }
 
     fun resetFilters() {
-        applyFilters(BrowseFilters(query = _state.value.filters.query))
+        applyFilters(BrowseFilters(query = queryFlow.value))
     }
 
     fun loadMore() {
@@ -163,8 +172,8 @@ class BrowseViewModel(
         )
 
     companion object {
-        fun factory(repo: AnikageRepository) = viewModelFactory {
-            initializer { BrowseViewModel(repo) }
+        fun factory(repo: AnikageRepository, initialSort: String? = null) = viewModelFactory {
+            initializer { BrowseViewModel(repo, initialSort) }
         }
     }
 }

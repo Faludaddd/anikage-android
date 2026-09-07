@@ -40,10 +40,10 @@ object Config {
     const val APP_SHORT_NAME = "Anikage"
 
     /** Version label (shown in About). */
-    const val APP_VERSION = "1.9.0"
+    const val APP_VERSION = "2.0.0"
 
     /** Version code (integer; bump for every release). */
-    const val APP_VERSION_CODE = 19
+    const val APP_VERSION_CODE = 20
 
     /** About / credits line. */
     val ABOUT_TEXT =

@@ -38,7 +38,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +69,8 @@ import com.anikage.app.ui.components.SectionBadge
 import com.anikage.app.ui.components.SectionHeader
 import com.anikage.app.ui.components.SiteCarouselRow
 import com.anikage.app.ui.components.SkeletonBlock
+import android.content.Intent
+import android.net.Uri
 
 /**
  * DETAILS — 1:1 port of anikage.cc/anime/info/{id} (mobile).
@@ -97,6 +101,7 @@ fun DetailsScreen(
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
     val theme = LocalAnikageTheme.current
+    var showListSheet by remember { mutableStateOf(false) }
 
     if (state.loading) {
         // Branded loading state — the site pulses surface-card placeholders
@@ -119,7 +124,8 @@ fun DetailsScreen(
 
     val details = state.details ?: return
 
-    LazyColumn(modifier = Modifier.fillMaxSize().background(theme.surface)) {
+    Box(modifier = Modifier.fillMaxSize().background(theme.surface)) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
         // ── Banner + poster + title block ────────────────────────────────
         item(key = "hero") {
             Box(modifier = Modifier.fillMaxWidth()) {
@@ -147,8 +153,27 @@ fun DetailsScreen(
                             )
                     )
                 }
-                // Site: the fixed top nav floats over the banner — no
-                // in-page back button on the info page.
+                // Back button over the banner (site: info page back button,
+                // h-10 w-10 rounded-xl border-white/6 bg-white/3).
+                Box(
+                    modifier = Modifier
+                        .statusBarsPadding()
+                        .padding(start = 16.dp, top = 10.dp)
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x08FFFFFF))
+                        .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+                        .clickable(onClick = onBackClick)
+                        .align(Alignment.TopStart),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = theme.fg,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
 
                 // Poster — 170x245 centered, overlaps banner bottom.
                 Column(
@@ -255,7 +280,7 @@ fun DetailsScreen(
                                 .shadow(8.dp, RoundedCornerShape(12.dp), spotColor = Color(0x4D000000))
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(theme.action)
-                                .clickable { onWatchClick(details.id, 1, state.slug) }
+                                .clickable { onWatchClick(details.id, 0, state.slug) }
                                 .height(36.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -263,7 +288,7 @@ fun DetailsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 modifier = Modifier
-                                    .clickable { onWatchClick(details.id, 1, state.slug) }
+                                    .clickable { onWatchClick(details.id, 0, state.slug) }
                                     .padding(start = 16.dp, end = 14.dp)
                             ) {
                                 Icon(
@@ -279,12 +304,15 @@ fun DetailsScreen(
                                     fontWeight = FontWeight.Medium,
                                 )
                             }
-                            // Split edit button (site: border-l bg-surface-input).
+                            // Split edit button (site: border-l bg-surface-input) —
+                            // list management needs an anikage.cc account; opens
+                            // the site where lists sync (honest, like the site's
+                            // signed-out login prompt).
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .background(theme.surfaceInput)
-                                    .clickable { /* list editor — site opens manage dialog */ }
+                                    .clickable { showListSheet = true }
                                     .width(44.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -297,8 +325,20 @@ fun DetailsScreen(
                             }
                         }
                         // Round icon buttons (site: size-9, share/bookmark).
-                        RoundAction(Icons.Default.Share) { /* share */ }
-                        RoundAction(Icons.Default.BookmarkAdd) { /* bookmark */ }
+                        RoundAction(Icons.Default.Share) {
+                            // Real share sheet: title + the site's info URL.
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TITLE, details.displayTitle())
+                                putExtra(
+                                    Intent.EXTRA_TEXT,
+                                    "${details.displayTitle()} — watch on Anikage: " +
+                                        "https://anikage.cc/anime/info/${state.slug ?: details.id}",
+                                )
+                            }
+                            context.startActivity(Intent.createChooser(send, "Share"))
+                        }
+                        RoundAction(Icons.Default.BookmarkAdd) { showListSheet = true }
                     }
                 }
             }
@@ -470,10 +510,23 @@ fun DetailsScreen(
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            items(chars) { c ->
+                            items(chars, key = { "char-${it.id}" }) { c ->
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.width(100.dp),
+                                    modifier = Modifier
+                                        .width(100.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            // Site: character card -> AniList page.
+                                            runCatching {
+                                                context.startActivity(
+                                                    Intent(
+                                                        Intent.ACTION_VIEW,
+                                                        Uri.parse("https://anilist.co/character/${c.id}"),
+                                                    )
+                                                )
+                                            }
+                                        },
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -505,6 +558,22 @@ fun DetailsScreen(
             }
         }
 
+        // ── Relations (site: relations rail before recommendations) ──────
+        val relations = details.relations?.nodes?.take(15).orEmpty()
+        if (relations.isNotEmpty()) {
+            item(key = "relations") {
+                Column(
+                    modifier = Modifier.padding(top = 24.dp),
+                ) {
+                    SectionHeader(
+                        title = "Relations",
+                        badge = SectionBadge.NONE,
+                    )
+                    SiteCarouselRow(items = relations, onClick = onAnimeClick)
+                }
+            }
+        }
+
         // ── Recommendations ───────────────────────────────────────────────
         val recs = details.recommendations?.nodes
             ?.mapNotNull { it.mediaRecommendation }
@@ -520,6 +589,71 @@ fun DetailsScreen(
                         badge = SectionBadge.NONE,
                     )
                     SiteCarouselRow(items = recs, onClick = onAnimeClick)
+                }
+            }
+        }
+    }
+
+        // List / bookmark sheet — list sync needs an anikage.cc account
+        // (auth.anikage.cc); the button opens the site, exactly what the
+        // site does for signed-out users (login prompt). Honest, not fake.
+        if (showListSheet) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { showListSheet = false }) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF101010))
+                        .border(1.dp, Color(0x14FFFFFF), RoundedCornerShape(16.dp))
+                        .padding(20.dp),
+                ) {
+                    Text(
+                        text = "Add to your list",
+                        style = WebTextStyles.base,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "AniList / Anikage list syncing uses an anikage.cc account. " +
+                            "Open the site to manage your list — your watch progress saved " +
+                            "in this app stays on your device.",
+                        style = WebTextStyles.sm,
+                        color = Color(0xFFA1A1AA),
+                        lineHeight = 19.sp,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = "Open anikage.cc",
+                            style = WebTextStyles.sm,
+                            color = theme.actionFg,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(theme.action)
+                                .clickable {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse("https://anikage.cc/anime/info/${state.slug ?: details.id}")),
+                                        )
+                                    }
+                                    showListSheet = false
+                                }
+                                .padding(horizontal = 16.dp, vertical = 9.dp),
+                        )
+                        Text(
+                            text = "Not now",
+                            style = WebTextStyles.sm,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0x14FFFFFF))
+                                .clickable { showListSheet = false }
+                                .padding(horizontal = 16.dp, vertical = 9.dp),
+                        )
+                    }
                 }
             }
         }

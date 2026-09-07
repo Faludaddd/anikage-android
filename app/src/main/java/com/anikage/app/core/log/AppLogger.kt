@@ -38,6 +38,8 @@ data class LogEntry(
     val category: LogCategory,
     val message: String,
     val error: String? = null,
+    /** Consecutive identical repeats collapsed into this entry (dedup). */
+    val repeat: Int = 0,
 )
 
 /**
@@ -112,30 +114,52 @@ object AppLogger {
         log(LogLevel.INFO, LogCategory.APP, "Verbose logging ${if (enabled) "enabled" else "disabled"}")
     }
 
-    /** Core entry point. Thread-safe. */
+    /** Core entry point. Thread-safe.
+     *
+     * Identical consecutive entries (same level/category/message/error —
+     * e.g. repeated cache hits or the same playback error re-fired) are
+     * collapsed into the previous entry with a `×N` repeat counter instead
+     * of flooding the buffer, logcat and the session file.
+     */
     fun log(level: LogLevel, category: LogCategory, message: String, error: Throwable? = null) {
         if (level == LogLevel.VERBOSE && !verboseEnabled) return
-        val entry = LogEntry(
-            id = synchronized(lock) { nextId++ },
-            timestamp = System.currentTimeMillis(),
-            level = level,
-            category = category,
-            message = message,
-            error = error?.let { "${it.javaClass.simpleName}: ${it.message}" },
-        )
+        val errorText = error?.let { "${it.javaClass.simpleName}: ${it.message}" }
         synchronized(lock) {
+            val last = buffer.lastOrNull()
+            if (last != null && last.level == level && last.category == category &&
+                last.message == message && last.error == errorText
+            ) {
+                val bumped = last.copy(repeat = last.repeat + 1)
+                buffer.removeLast()
+                buffer.addLast(bumped)
+                _entries.value = buffer.toList()
+                // Bumped repeats only refresh logcat — the session file keeps
+                // the original entry (dedup, no file flooding).
+                runCatching {
+                    Log.println(level.priority, "Anikage/${category.label}", "$message (×${bumped.repeat + 1})")
+                }
+                return
+            }
+            val entry = LogEntry(
+                id = nextId++,
+                timestamp = System.currentTimeMillis(),
+                level = level,
+                category = category,
+                message = message,
+                error = errorText,
+            )
             buffer.addLast(entry)
             while (buffer.size > MAX_ENTRIES) buffer.removeFirst()
             _entries.value = buffer.toList()
-        }
-        // Persist to the session file (crash-safe, background flush).
-        SessionLogger.append(entry)
-        runCatching {
-            Log.println(
-                level.priority,
-                "Anikage/${category.label}",
-                message + (entry.error?.let { "\n$it" } ?: ""),
-            )
+            // Persist to the session file (crash-safe, background flush).
+            SessionLogger.append(entry)
+            runCatching {
+                Log.println(
+                    level.priority,
+                    "Anikage/${category.label}",
+                    message + (errorText?.let { "\n$it" } ?: ""),
+                )
+            }
         }
     }
 

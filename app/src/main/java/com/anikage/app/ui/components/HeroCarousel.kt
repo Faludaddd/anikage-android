@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -40,6 +42,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -61,6 +64,7 @@ import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
 import com.anikage.app.core.util.HtmlText
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * HERO CAROUSEL — 1:1 port of the Anikage website hero (`.hero-shell`).
@@ -102,21 +106,28 @@ fun HeroCarousel(
         else -> configuration.screenHeightDp.dp * 0.72f
     }
     val slideMillis = 7000
+    val scope = rememberCoroutineScope()
 
-    var currentIndex by remember(items) { mutableIntStateOf(0) }
-    var progress by remember(items) { mutableFloatStateOf(0f) }
     val totalItems = items.size
-    val current = items[currentIndex.coerceIn(0, totalItems - 1)]
+    // Swipeable hero: HorizontalPager gives native drag + snap + momentum;
+    // arrows stay as secondary controls (site keeps them too).
+    val pagerState = rememberPagerState(pageCount = { totalItems })
+    var progress by remember(items) { mutableFloatStateOf(0f) }
 
     // Auto-advance with progress fill (site animates the active dot's fill).
-    LaunchedEffect(currentIndex, totalItems) {
+    // Restarts on every page change (swipe, dot tap, arrow) so the fill
+    // always tracks the VISIBLE slide.
+    LaunchedEffect(pagerState.currentPage, totalItems) {
+        if (totalItems < 2) return@LaunchedEffect
         progress = 0f
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < slideMillis) {
             delay(50)
             progress = ((System.currentTimeMillis() - start).toFloat() / slideMillis).coerceIn(0f, 1f)
         }
-        if (totalItems > 1) currentIndex = (currentIndex + 1) % totalItems
+        if (!pagerState.isScrollInProgress) {
+            pagerState.animateScrollToPage((pagerState.currentPage + 1) % totalItems)
+        }
     }
 
     Box(
@@ -124,6 +135,11 @@ fun HeroCarousel(
             .fillMaxWidth()
             .height(heroHeight)
     ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            val current = items[page.coerceIn(0, totalItems - 1)]
         // ── Layer 0: background artwork (TVDB fanart → AniList banner → cover)
         AsyncImage(
             model = current.fanartUrl ?: current.bannerImage ?: current.coverUrl(),
@@ -131,6 +147,17 @@ fun HeroCarousel(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
+
+        // ── Layer 0.5: muted trailer video (site: autoplayHeroTrailer plays
+        // the YouTube trailer full-bleed beneath the same gradient stack).
+        if (com.anikage.app.core.settings.SettingsState.autoplayHeroTrailer &&
+            !current.trailerId.isNullOrBlank()
+        ) {
+            HeroTrailerLayer(
+                trailerId = current.trailerId,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
         // ── Layer 1: gradient stack (exact site values)
         // bottom-up: from-surface via-surface/30 to-surface/10
@@ -277,6 +304,7 @@ fun HeroCarousel(
                 )
             }
         }
+        } // end pager page
 
         // ── Bottom controls: dots + counter + arrows (site: bottom-4)
         Row(
@@ -293,14 +321,14 @@ fun HeroCarousel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 items.forEachIndexed { idx, _ ->
-                    val active = idx == currentIndex
+                    val active = idx == pagerState.currentPage
                     Box(
                         modifier = Modifier
                             .height(4.dp)
                             .width(if (active) 32.dp else 16.dp)
                             .clip(RoundedCornerShape(50))
                             .background(Color(0x1FFFFFFF))       // white/12
-                            .clickable { currentIndex = idx }
+                            .clickable { scope.launch { pagerState.animateScrollToPage(idx) } }
                     ) {
                         if (active) {
                             // Animated fill — mirrors the site's CSS transition
@@ -322,15 +350,16 @@ fun HeroCarousel(
             ) {
                 // Slide counter (site: text-xs text-white/35 tabular-nums)
                 Text(
-                    text = "${currentIndex + 1}/$totalItems",
+                    text = "${pagerState.currentPage + 1}/$totalItems",
                     style = WebTextStyles.xs,
                     color = Color(0x59FFFFFF),
                 )
                 HeroArrowButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft) {
-                    currentIndex = if (currentIndex == 0) totalItems - 1 else currentIndex - 1
+                    val target = if (pagerState.currentPage == 0) totalItems - 1 else pagerState.currentPage - 1
+                    scope.launch { pagerState.animateScrollToPage(target) }
                 }
                 HeroArrowButton(Icons.AutoMirrored.Filled.KeyboardArrowRight) {
-                    currentIndex = (currentIndex + 1) % totalItems
+                    scope.launch { pagerState.animateScrollToPage((pagerState.currentPage + 1) % totalItems) }
                 }
             }
         }
@@ -473,4 +502,41 @@ private fun HeroArrowButton(icon: ImageVector, onClick: () -> Unit) {
             modifier = Modifier.size(20.dp),
         )
     }
+}
+
+/**
+ * Muted, looping YouTube trailer layer — the site's autoplayHeroTrailer
+ * setting: the spotlight slide's trailer plays full-bleed beneath the hero
+ * gradient stack (youtube-nocookie iframe embed, no controls, muted,
+ * looped), exactly like anikage.cc's hero.
+ */
+@Composable
+private fun HeroTrailerLayer(
+    trailerId: String,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.ui.viewinterop.AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            android.webkit.WebView(ctx).apply {
+                settings.javaScriptEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                settings.loadsImagesAutomatically = false
+                isClickable = false
+                webViewClient = android.webkit.WebViewClient()
+                loadUrl(
+                    "https://www.youtube-nocookie.com/embed/$trailerId" +
+                        "?autoplay=1&mute=1&loop=1&playlist=$trailerId" +
+                        "&controls=0&modestbranding=1&playsinline=1&rel=0&disablekb=1",
+                )
+            }
+        },
+        update = { view ->
+            val url = "https://www.youtube-nocookie.com/embed/$trailerId" +
+                "?autoplay=1&mute=1&loop=1&playlist=$trailerId" +
+                "&controls=0&modestbranding=1&playsinline=1&rel=0&disablekb=1"
+            if (view.url != url) view.loadUrl(url)
+        },
+        onRelease = { it.destroy() },
+    )
 }

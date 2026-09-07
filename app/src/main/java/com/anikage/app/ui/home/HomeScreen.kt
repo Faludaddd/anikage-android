@@ -63,7 +63,10 @@ import com.anikage.app.ui.components.siteSectionGap
  */
 @Composable
 fun HomeScreen(
+    /** Hero "More Info" — opens the anime info page (site 1:1). */
     onAnimeClick: (Anime) -> Unit,
+    /** Section cards / featured banner — open the watch screen (user spec). */
+    onCardClick: (Anime) -> Unit,
     onWatchClick: (Anime) -> Unit,
     onSeeAllClick: (String) -> Unit,
 ) {
@@ -75,6 +78,7 @@ fun HomeScreen(
     HomeContent(
         state = state,
         onAnimeClick = onAnimeClick,
+        onCardClick = onCardClick,
         onWatchClick = onWatchClick,
         onSeeAllClick = onSeeAllClick,
         onRetry = viewModel::load,
@@ -85,6 +89,7 @@ fun HomeScreen(
 private fun HomeContent(
     state: HomeUiState,
     onAnimeClick: (Anime) -> Unit,
+    onCardClick: (Anime) -> Unit,
     onWatchClick: (Anime) -> Unit,
     onSeeAllClick: (String) -> Unit,
     onRetry: () -> Unit,
@@ -133,7 +138,7 @@ private fun HomeContent(
                     FeaturedBanner(
                         anime = featured,
                         onWatchClick = onWatchClick,
-                        onClick = onAnimeClick,
+                        onClick = onCardClick,
                     )
                 }
             }
@@ -148,7 +153,7 @@ private fun HomeContent(
                         badge = SectionBadge.HOT,
                         onViewAll = { onSeeAllClick("trending") },
                     )
-                    SiteCarouselRow(items = feed.trending, onClick = onAnimeClick)
+                    SiteCarouselRow(items = feed.trending, onClick = onCardClick)
                 }
             }
         }
@@ -162,7 +167,7 @@ private fun HomeContent(
                         badge = SectionBadge.SEASONAL,
                         onViewAll = { onSeeAllClick("seasonal") },
                     )
-                    SiteCarouselRow(items = feed.seasonal, onClick = onAnimeClick)
+                    SiteCarouselRow(items = feed.seasonal, onClick = onCardClick)
                 }
             }
         }
@@ -176,7 +181,7 @@ private fun HomeContent(
                         badge = SectionBadge.TOP,
                         onViewAll = { onSeeAllClick("favorite") },
                     )
-                    SiteCarouselRow(items = feed.favorites, onClick = onAnimeClick)
+                    SiteCarouselRow(items = feed.favorites, onClick = onCardClick)
                 }
             }
         }
@@ -202,7 +207,7 @@ private fun HomeContent(
                             Top10Row(
                                 rank = idx + 1,
                                 anime = anime,
-                                onClick = onAnimeClick,
+                                onClick = onCardClick,
                                 isMovieRow = showMovies,
                             )
                         }
@@ -220,7 +225,7 @@ private fun HomeContent(
                         badge = SectionBadge.UPCOMING,
                         onViewAll = { onSeeAllClick("upcoming") },
                     )
-                    SiteCarouselRow(items = feed.upcoming, onClick = onAnimeClick)
+                    SiteCarouselRow(items = feed.upcoming, onClick = onCardClick)
                 }
             }
         }

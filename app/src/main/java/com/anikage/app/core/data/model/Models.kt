@@ -19,11 +19,19 @@ data class AnimeTitle(
     val english: String? = null,
     val native: String? = null,
 ) {
-    /** Best display title: prefer English, fall back to Romaji, then Native. */
-    fun preferred(): String = english?.takeIf { it.isNotBlank() }
-        ?: romaji?.takeIf { it.isNotBlank() }
-        ?: native?.takeIf { it.isNotBlank() }
-        ?: "Unknown"
+    /**
+     * Best display title honoring the user's title-language setting
+     * (site: animeTitleLanguage english | romaji | native) with sensible
+     * fallbacks when the preferred variant is missing.
+     */
+    fun preferred(): String {
+        fun s(v: String?) = v?.takeIf { it.isNotBlank() }
+        return when (com.anikage.app.core.settings.SettingsState.titleLanguage) {
+            "romaji" -> s(romaji) ?: s(english) ?: s(native)
+            "native" -> s(native) ?: s(romaji) ?: s(english)
+            else -> s(english) ?: s(romaji) ?: s(native)
+        } ?: "Unknown"
+    }
 }
 
 // ---------------------------------------------------------------------------

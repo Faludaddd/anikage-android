@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Balance
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -87,6 +88,7 @@ private data class SectionDef(val id: String, val label: String, val icon: Image
 fun SettingsScreen(
     onBackClick: () -> Unit,
     onOpenDiagnostics: () -> Unit,
+    onOpenDmca: () -> Unit = {},
 ) {
     val theme = LocalAnikageTheme.current
     val context = LocalContext.current
@@ -214,7 +216,7 @@ fun SettingsScreen(
                     "general" -> GeneralSection()
                     "player" -> PlayerSection()
                     "themes" -> ThemesSection()
-                    "about" -> AboutSection(onOpenDiagnostics = onOpenDiagnostics)
+                    "about" -> AboutSection(onOpenDiagnostics = onOpenDiagnostics, onOpenDmca = onOpenDmca)
                 }
             }
         }
@@ -779,7 +781,7 @@ private fun ThemesSection() {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun AboutSection(onOpenDiagnostics: () -> Unit) {
+private fun AboutSection(onOpenDiagnostics: () -> Unit, onOpenDmca: () -> Unit) {
     val theme = LocalAnikageTheme.current
 
     SectionTitle("About")
@@ -832,6 +834,49 @@ private fun AboutSection(onOpenDiagnostics: () -> Unit) {
                 )
                 Text(
                     text = "System health and application logs",
+                    style = WebTextStyles.sm,
+                    color = Color(0xFF71717A),
+                )
+            }
+            Icon(
+                Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = Color(0xFF71717A),
+                modifier = Modifier.size(18.dp).rotate90(),
+            )
+        }
+    }
+
+    // DMCA + Legal entry (site: footer "Legal / DMCA").
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0x08FFFFFF))
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(16.dp))
+            .clickable(onClick = onOpenDmca)
+            .padding(20.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                Icons.Default.Balance,
+                contentDescription = null,
+                tint = theme.fg,
+                modifier = Modifier.size(20.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "DMCA + Legal Information",
+                    style = WebTextStyles.base,
+                    color = theme.fg,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Service model, copyright policy and user responsibilities",
                     style = WebTextStyles.sm,
                     color = Color(0xFF71717A),
                 )

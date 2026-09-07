@@ -206,6 +206,13 @@ fun MusicInfoScreen(
                                     fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable {
+                                            // Site: song's anime name -> info page.
+                                            state.anime?.anilistId()?.let(onOpenAnime)
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
                                 )
                             }
                         }

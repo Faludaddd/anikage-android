@@ -43,6 +43,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,10 +92,11 @@ import com.anikage.app.core.theme.WebTextStyles
 @Composable
 fun BrowseScreen(
     onAnimeClick: (Anime) -> Unit,
+    initialSort: String? = null,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val repo = remember { AnikageRepository.get(context) }
-    val viewModel: BrowseViewModel = viewModel(factory = BrowseViewModel.factory(repo))
+    val viewModel: BrowseViewModel = viewModel(factory = BrowseViewModel.factory(repo, initialSort))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val theme = LocalAnikageTheme.current
 
@@ -125,16 +127,23 @@ fun BrowseScreen(
         // ── Top clearance: site pt-20 (content starts under the floating nav).
         Spacer(Modifier.height(if (isDesktop) 68.dp else 56.dp))
 
+        // Live search text (site's search field) — local state so typing is
+        // instant; the ViewModel debounces the actual fetch.
+        var searchQuery by rememberSaveable { mutableStateOf("") }
+        val onQueryChange: (String) -> Unit = { searchQuery = it; viewModel.setQuery(it) }
+
         if (isDesktop) {
             DesktopFilterRow(
                 filters = state.filters,
+                query = searchQuery,
+                onQuery = onQueryChange,
                 onChange = viewModel::setFilters,
                 onReset = viewModel::resetFilters,
             )
         } else {
             MobileFilterBar(
-                query = state.filters.query,
-                onQuery = viewModel::setQuery,
+                query = searchQuery,
+                onQuery = onQueryChange,
                 filtersOpen = filtersOpen,
                 onToggle = { filtersOpen = !filtersOpen },
                 canReset = !state.filters.isDefault,
@@ -452,6 +461,7 @@ private fun MobileFilterPanel(
                     val next = if (on) filters.genres + value else filters.genres - value
                     onChange(filters.copy(genres = next))
                 },
+                onClear = { onChange(filters.copy(genres = emptySet())) },
                 modifier = Modifier.weight(1f),
             )
             FilterSelect(
@@ -461,6 +471,7 @@ private fun MobileFilterPanel(
                 multi = false,
                 checked = { filters.sort == it },
                 onPick = { value, _ -> onChange(filters.copy(sort = value)) },
+                onClear = { onChange(filters.copy(sort = "popularity")) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -472,6 +483,7 @@ private fun MobileFilterPanel(
                 multi = false,
                 checked = { filters.season == it },
                 onPick = { value, _ -> onChange(filters.copy(season = value)) },
+                onClear = { onChange(filters.copy(season = null)) },
                 modifier = Modifier.weight(1f),
             )
             FilterSelect(
@@ -495,6 +507,7 @@ private fun MobileFilterPanel(
                     val next = if (on) filters.statuses + value else filters.statuses - value
                     onChange(filters.copy(statuses = next))
                 },
+                onClear = { onChange(filters.copy(statuses = emptySet())) },
                 modifier = Modifier.weight(1f),
             )
             FilterSelect(
@@ -507,6 +520,7 @@ private fun MobileFilterPanel(
                     val next = if (on) filters.formats + value else filters.formats - value
                     onChange(filters.copy(formats = next))
                 },
+                onClear = { onChange(filters.copy(formats = emptySet())) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -517,6 +531,7 @@ private fun MobileFilterPanel(
             multi = false,
             checked = { filters.origin == it },
             onPick = { value, _ -> onChange(filters.copy(origin = value)) },
+            onClear = { onChange(filters.copy(origin = null)) },
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -529,6 +544,8 @@ private fun MobileFilterPanel(
 @Composable
 private fun DesktopFilterRow(
     filters: BrowseFilters,
+    query: String,
+    onQuery: (String) -> Unit,
     onChange: (BrowseFilters) -> Unit,
     onReset: () -> Unit,
 ) {
@@ -542,7 +559,7 @@ private fun DesktopFilterRow(
         // Search — site: label "Search" (title-subsec) + input flex-1.
         Column(modifier = Modifier.weight(1f)) {
             Text("Search", style = WebTextStyles.sm, color = LocalAnikageTheme.current.fg, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp))
-            SiteSearchInput(filters.query) { onChange(filters.copy(query = it)) }
+            SiteSearchInput(query, onQuery)
         }
         Column(modifier = Modifier.width(180.dp)) {
             Text("Genres", style = WebTextStyles.sm, color = LocalAnikageTheme.current.fg, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp))
@@ -556,6 +573,7 @@ private fun DesktopFilterRow(
                     val next = if (on) filters.genres + value else filters.genres - value
                     onChange(filters.copy(genres = next))
                 },
+                onClear = { onChange(filters.copy(genres = emptySet())) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -568,6 +586,7 @@ private fun DesktopFilterRow(
                 multi = false,
                 checked = { filters.sort == it },
                 onPick = { value, _ -> onChange(filters.copy(sort = value)) },
+                onClear = { onChange(filters.copy(sort = "popularity")) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -580,6 +599,7 @@ private fun DesktopFilterRow(
                 multi = false,
                 checked = { filters.year?.toString() == it },
                 onPick = { value, _ -> onChange(filters.copy(year = value.toIntOrNull())) },
+                onClear = { onChange(filters.copy(year = null)) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -627,7 +647,7 @@ private fun DesktopFilterSidebar(
                 onChange(filters.copy(formats = next))
             },
             selectedCount = filters.formats.size,
-            onSelect = {},
+            onSelect = { onChange(filters.copy(formats = emptySet())) },
         )
         RadioAccordion(
             title = "Status",
@@ -640,7 +660,7 @@ private fun DesktopFilterSidebar(
                 onChange(filters.copy(statuses = next))
             },
             selectedCount = filters.statuses.size,
-            onSelect = {},
+            onSelect = { onChange(filters.copy(statuses = emptySet())) },
         )
         RadioAccordion(
             title = "Origin",
@@ -818,6 +838,8 @@ private fun FilterSelect(
     checked: (String) -> Boolean,
     onPick: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** "Any" — clears this filter back to its default (site's reset row). */
+    onClear: () -> Unit = {},
 ) {
     val theme = LocalAnikageTheme.current
     var open by remember { mutableStateOf(false) }
@@ -868,11 +890,11 @@ private fun FilterSelect(
                     .background(Color(0xFF151515))
                     .width(220.dp),
             ) {
-                // Clear option.
+                // Clear option — resets the filter (site: "Any").
                 DropdownRow(
                     label = "Any",
                     checked = selected.isBlank(),
-                ) { onPick("", true); open = false }
+                ) { onClear(); open = false }
                 options.forEach { (value, optionLabel) ->
                     DropdownRow(
                         label = optionLabel,

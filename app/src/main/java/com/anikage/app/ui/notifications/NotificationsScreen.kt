@@ -109,13 +109,20 @@ fun NotificationsScreen(
             }
             // Actions — site: mark-all-read + settings gear.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val context = androidx.compose.ui.platform.LocalContext.current
                 Box(
                     modifier = Modifier
                         .size(36.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(Color(0x08FFFFFF))
                         .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(10.dp))
-                        .clickable { /* nothing to mark read — empty state */ },
+                        .clickable {
+                            // Signed-out state: nothing to mark read (site
+                            // shows the same empty state without auth).
+                            android.widget.Toast.makeText(
+                                context, "All caught up", android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
