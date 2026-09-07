@@ -1,8 +1,6 @@
 package com.anikage.app.ui.player
 
 import android.app.Activity
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,15 +31,14 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
-import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
@@ -83,6 +80,7 @@ import coil.compose.AsyncImage
 import com.anikage.app.Config
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.api.AnikageComment
+import com.anikage.app.core.download.EpisodeDownloadEngine
 import com.anikage.app.core.settings.SettingsState
 import com.anikage.app.core.theme.LocalAnikageTheme
 import com.anikage.app.core.theme.WebTextStyles
@@ -98,26 +96,28 @@ import android.content.pm.ActivityInfo
  *  → server panel (SUB/DUB + servers + E-servers) → tabs (Episodes | Info)
  *  → episodes / info → comments. Wide layout mirrors the site's 2-col grid.
  *
- *  v2.0.0: full custom player (all controls working), fullscreen with
- *  orientation + immersive bars, hardware-keyboard shortcuts, download +
- *  report dialogs (real API calls), E-server WebView embeds, and every
- *  player-related setting wired.
+ *  v2.1.0: all player functions live IN the player (quick menus); Report
+ *  removed; in-app downloads with live progress; episode rows show
+ *  watched state + progress + filler; local anime list; avatars fixed.
  */
 @Composable
 fun WatchScreen(
     animeId: Int,
     initialEpisode: Int,
     slug: String? = null,
+    localFile: String? = null,
     onBackClick: () -> Unit = {},
     onOpenInfo: (Int) -> Unit = {},
+    onOpenDownloads: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as android.app.Application
     val repo = remember { AnikageRepository.get(context) }
     val viewModel: WatchViewModel = viewModel(
-        factory = WatchViewModel.factory(app, repo, animeId, initialEpisode, slug),
+        factory = WatchViewModel.factory(app, repo, animeId, initialEpisode, slug, localFile),
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val downloadStates by EpisodeDownloadEngine.statesFlow.collectAsStateWithLifecycle()
     val theme = LocalAnikageTheme.current
     val configuration = LocalConfiguration.current
     val isWide = configuration.screenWidthDp.dp >= 840.dp // site lg (2-col watch grid)
@@ -126,12 +126,11 @@ fun WatchScreen(
     var tab by remember { mutableIntStateOf(0) }
     var isFullscreen by remember { mutableStateOf(false) }
     var showDownloadDialog by remember { mutableStateOf(false) }
-    var showReportDialog by remember { mutableStateOf(false) }
     var showListSheet by remember { mutableStateOf(false) }
 
     val activity = context as? Activity
 
-    // Fullscreen stage — same player instance (VM-owned), landscape lock +
+    // Fullscreen stage — same player instance (VM-owned), orientation +
     // immersive bars below; position/episode/controls state all preserved.
     val fullscreenStage: @Composable () -> Unit = {
         PlayerStage(
@@ -139,7 +138,6 @@ fun WatchScreen(
             viewModel = viewModel,
             isFullscreen = true,
             onToggleFullscreen = { isFullscreen = false },
-            onOpenReport = { showReportDialog = true },
         )
     }
 
@@ -147,12 +145,17 @@ fun WatchScreen(
     // a second back leaves the screen.
     BackHandler(enabled = isFullscreen) { isFullscreen = false }
 
-    // ── fullscreen: landscape lock + immersive system bars (site: data-orientation)
+    // ── fullscreen: orientation per setting + immersive system bars ────
     DisposableEffect(isFullscreen) {
         val window = activity?.window
         val controller = window?.let { WindowCompat.getInsetsController(it, window.decorView) }
         if (isFullscreen) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            activity?.requestedOrientation = when (SettingsState.fullscreenOrientation) {
+                "sensor" -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                "portrait" -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                "none" -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                else -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
             controller?.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller?.hide(WindowInsetsCompat.Type.systemBars())
@@ -188,6 +191,7 @@ fun WatchScreen(
     }
 
     // ── hardware-keyboard shortcuts (site: anikage-watch-hotkeys) ────────
+    val seekSec = SettingsState.seekAmountSec.coerceIn(5, 60)
     val keyHandler = Modifier.onPreviewKeyEvent { event ->
         if (event.type != KeyEventType.KeyDown || state.streamUrl == null || state.embedActive != null) {
             return@onPreviewKeyEvent false
@@ -208,8 +212,10 @@ fun WatchScreen(
             Key.F -> { isFullscreen = !isFullscreen; true }
             Key.C -> { viewModel.toggleCaptions(); true }
             Key.I -> { viewModel.enterPictureInPicture(); true }
-            Key.J -> { viewModel.seekBy(-10_000L); true }
-            Key.L -> { viewModel.seekBy(10_000L); true }
+            Key.J -> { viewModel.seekBy(-seekSec * 1000L); true }
+            Key.L -> { viewModel.seekBy(seekSec * 1000L); true }
+            Key.N -> { viewModel.nextEpisode(); true }
+            Key.P -> { viewModel.previousEpisode(); true }
             Key.DirectionRight -> { viewModel.seekBy(5_000L); true }
             Key.DirectionLeft -> { viewModel.seekBy(-5_000L); true }
             Key.MoveHome -> { viewModel.seekTo(0L); true }
@@ -250,48 +256,48 @@ fun WatchScreen(
                     WatchWideLayout(
                         state = state,
                         viewModel = viewModel,
+                        downloadStates = downloadStates,
                         onEnterFullscreen = { isFullscreen = true },
                         onOpenInfo = onOpenInfo,
                         onDownload = { showDownloadDialog = true },
-                        onReport = { showReportDialog = true },
                         onList = { showListSheet = true },
+                        onOpenDownloads = onOpenDownloads,
                     )
                 } else {
                     WatchMobileLayout(
                         state = state,
                         viewModel = viewModel,
+                        downloadStates = downloadStates,
                         onEnterFullscreen = { isFullscreen = true },
                         tab = tab,
                         onTabChange = { tab = it },
                         onOpenInfo = onOpenInfo,
                         onDownload = { showDownloadDialog = true },
-                        onReport = { showReportDialog = true },
                         onList = { showListSheet = true },
+                        onOpenDownloads = onOpenDownloads,
                     )
                 }
             }
         }
 
-        // ── dialogs (site: download links / report / list sheet) ──────────
+        // ── dialogs (in-app download / local list sheet) ─────────────
         if (showDownloadDialog) {
             DownloadDialog(
+                animeId = animeId,
                 viewModel = viewModel,
-                episode = state.episode,
+                downloadStates = downloadStates,
+                onOpenDownloads = {
+                    showDownloadDialog = false
+                    onOpenDownloads()
+                },
                 onDismiss = { showDownloadDialog = false },
             )
         }
-        if (showReportDialog) {
-            ReportDialog(
-                viewModel = viewModel,
-                onDismiss = { showReportDialog = false },
-                onRefetch = {
-                    showReportDialog = false
-                    viewModel.reloadStream(refresh = true)
-                },
-            )
-        }
         if (showListSheet) {
-            ListSheet(onDismiss = { showListSheet = false })
+            ListSheet(
+                viewModel = viewModel,
+                onDismiss = { showListSheet = false },
+            )
         }
     }
 }
@@ -304,19 +310,28 @@ fun WatchScreen(
 private fun WatchMobileLayout(
     state: WatchUiState,
     viewModel: WatchViewModel,
+    downloadStates: List<EpisodeDownloadEngine.DownloadState>,
     onEnterFullscreen: () -> Unit,
     tab: Int,
     onTabChange: (Int) -> Unit,
     onOpenInfo: (Int) -> Unit,
     onDownload: () -> Unit,
-    onReport: () -> Unit,
     onList: () -> Unit,
+    onOpenDownloads: () -> Unit,
 ) {
     // ONE sort per episode-list change (was re-sorted on every position
     // tick — O(n log n) 4x/second for 1000+ episode lists).
     val episodes = remember(state.episodes, SettingsState.episodeSortOrder) {
         if (SettingsState.episodeSortOrder == "desc") state.episodes.sortedByDescending { it.number }
         else state.episodes.sortedBy { it.number }
+    }
+    val context = LocalContext.current
+    var downloadedEpNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    LaunchedEffect(state.slug, state.episodes.size) {
+        runCatching {
+            val repo = AnikageRepository.get(context)
+            downloadedEpNumbers = repo.downloadedForAnime(animeIdOf(state)).map { it.episode }.toSet()
+        }
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -329,7 +344,6 @@ private fun WatchMobileLayout(
                 viewModel = viewModel,
                 isFullscreen = false,
                 onToggleFullscreen = onEnterFullscreen,
-                onOpenReport = onReport,
             )
         }
         item(key = "notice-meta") {
@@ -340,8 +354,14 @@ private fun WatchMobileLayout(
                     state = state,
                     viewModel = viewModel,
                     onDownload = onDownload,
-                    onReport = onReport,
                     onList = onList,
+                )
+                Spacer(Modifier.height(8.dp))
+                EpisodeDownloadCard(
+                    animeId = animeIdOf(state),
+                    state = state,
+                    downloadStates = downloadStates,
+                    onOpenDownloads = onOpenDownloads,
                 )
             }
         }
@@ -355,6 +375,8 @@ private fun WatchMobileLayout(
                 EpisodeRow(
                     ep = ep,
                     active = ep.number == state.episode,
+                    progress = state.episodeProgress[ep.number],
+                    downloaded = downloadedEpNumbers.contains(ep.number),
                     onClick = { viewModel.switchEpisode(ep.number) },
                 )
             }
@@ -383,15 +405,24 @@ private fun WatchMobileLayout(
 private fun WatchWideLayout(
     state: WatchUiState,
     viewModel: WatchViewModel,
+    downloadStates: List<EpisodeDownloadEngine.DownloadState>,
     onEnterFullscreen: () -> Unit,
     onOpenInfo: (Int) -> Unit,
     onDownload: () -> Unit,
-    onReport: () -> Unit,
     onList: () -> Unit,
+    onOpenDownloads: () -> Unit,
 ) {
     val episodes = remember(state.episodes, SettingsState.episodeSortOrder) {
         if (SettingsState.episodeSortOrder == "desc") state.episodes.sortedByDescending { it.number }
         else state.episodes.sortedBy { it.number }
+    }
+    val context = LocalContext.current
+    var downloadedEpNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    LaunchedEffect(state.slug, state.episodes.size) {
+        runCatching {
+            val repo = AnikageRepository.get(context)
+            downloadedEpNumbers = repo.downloadedForAnime(animeIdOf(state)).map { it.episode }.toSet()
+        }
     }
     Row(
         modifier = Modifier
@@ -410,7 +441,6 @@ private fun WatchWideLayout(
                 viewModel = viewModel,
                 isFullscreen = false,
                 onToggleFullscreen = onEnterFullscreen,
-                onOpenReport = onReport,
             )
             ServerNotice()
             Spacer(Modifier.height(12.dp))
@@ -418,8 +448,15 @@ private fun WatchWideLayout(
                 state = state,
                 viewModel = viewModel,
                 onDownload = onDownload,
-                onReport = onReport,
                 onList = onList,
+                horizontalPadding = PaddingValues(0.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            EpisodeDownloadCard(
+                animeId = animeIdOf(state),
+                state = state,
+                downloadStates = downloadStates,
+                onOpenDownloads = onOpenDownloads,
                 horizontalPadding = PaddingValues(0.dp),
             )
             ServerPanel(state = state, viewModel = viewModel, horizontalPadding = PaddingValues(0.dp))
@@ -473,6 +510,8 @@ private fun WatchWideLayout(
                     EpisodeRow(
                         ep = ep,
                         active = ep.number == state.episode,
+                        progress = state.episodeProgress[ep.number],
+                        downloaded = downloadedEpNumbers.contains(ep.number),
                         onClick = { viewModel.switchEpisode(ep.number) },
                         horizontalPadding = PaddingValues(0.dp),
                     )
@@ -502,7 +541,6 @@ private fun PlayerStage(
     viewModel: WatchViewModel,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
-    onOpenReport: () -> Unit,
 ) {
     val ambientUrl = state.episodes.firstOrNull { it.number == state.episode }?.thumbnail
         ?: state.details?.bannerImage
@@ -536,8 +574,7 @@ private fun PlayerStage(
                 viewModel = viewModel,
                 isFullscreen = isFullscreen,
                 onToggleFullscreen = onToggleFullscreen,
-                onBack = onOpenReport,
-                onOpenReport = onOpenReport,
+                onBack = onToggleFullscreen,
                 modifier = Modifier.fillMaxSize(),
             )
             // Stream resolution in progress — thin top progress shimmer.
@@ -735,7 +772,6 @@ private fun MetaRow(
     state: WatchUiState,
     viewModel: WatchViewModel,
     onDownload: () -> Unit,
-    onReport: () -> Unit,
     onList: () -> Unit,
     horizontalPadding: PaddingValues = PaddingValues(horizontal = 0.dp),
 ) {
@@ -805,7 +841,7 @@ private fun MetaRow(
                 }
             }
         }
-        // Site's action row: Add to List / Download / Report.
+        // Site's action row: Add to List / Download (Report removed).
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -820,11 +856,6 @@ private fun MetaRow(
                 icon = Icons.Filled.FileDownload,
                 label = "Download",
                 onClick = onDownload,
-            )
-            ActionButton(
-                icon = Icons.Default.Flag,
-                label = "Report",
-                onClick = onReport,
             )
         }
     }
@@ -1074,229 +1105,463 @@ private fun animeIdOf(state: WatchUiState): Int = state.details?.id ?: 0
 
 @Composable
 private fun DownloadDialog(
+    animeId: Int,
     viewModel: WatchViewModel,
-    episode: Int,
+    downloadStates: List<EpisodeDownloadEngine.DownloadState>,
+    onOpenDownloads: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var links by remember {
-        mutableStateOf<List<com.anikage.app.core.data.api.AnikageDownloadLink>>(emptyList())
+    val theme = LocalAnikageTheme.current
+    val state = viewModel.state.collectAsStateWithLifecycle().value
+
+    // Resolve qualities the first time the dialog opens (per episode).
+    LaunchedEffect(state.episode, state.streamServer, state.streamLang) {
+        viewModel.resolveDownloadQualities()
     }
-    LaunchedEffect(episode) {
-        loading = true
-        error = null
-        viewModel.downloadLinks()
-            .onSuccess { response ->
-                links = response.downloads.filter { it.link != null }
-                if (links.isEmpty()) error = "No download links available for this episode."
-            }
-            .onFailure { e ->
-                error = e.message ?: "Failed to load download links."
-            }
-        loading = false
-    }
+
+    val engineStates = downloadStates.filter { it.animeId == animeId && it.episode == state.episode }
 
     SiteDialog(
-        title = "Download Episode $episode",
+        title = "Download Episode ${state.episode}",
         onDismiss = onDismiss,
     ) {
-        if (loading) {
-            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = LocalAnikageTheme.current.action, strokeWidth = 2.dp)
-            }
-        } else if (error != null) {
-            Text(
-                text = error ?: "",
-                style = WebTextStyles.sm,
-                color = Color(0xFFD4D4D8),
-                modifier = Modifier.padding(16.dp),
-            )
-        } else {
-            val byAudio = links.groupBy { it.audio ?: "sub" }
-            byAudio.forEach { (audio, audioLinks) ->
+        if (state.playingDownloaded) {
+            // Offline copy playing — offer to go back to the live stream.
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Text(
-                    text = if (audio == "dub") "Dubbed" else "Subtitled",
-                    style = WebTextStyles.xs,
-                    color = LocalAnikageTheme.current.fgMuted,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                )
-                audioLinks.sortedByDescending { it.resolution?.filter { c -> c.isDigit() }?.toIntOrNull() ?: 0 }
-                    .forEach { link ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable {
-                                    link.link?.let { url ->
-                                        runCatching {
-                                            context.startActivity(
-                                                Intent(Intent.ACTION_VIEW, Uri.parse(url)),
-                                            )
-                                        }
-                                    }
-                                }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                        ) {
-                            Text(
-                                text = link.resolution ?: "Download",
-                                style = WebTextStyles.sm,
-                                color = Color.White,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            Text(
-                                text = link.size ?: "Get",
-                                style = WebTextStyles.xs,
-                                color = Color(0x70FFFFFF),
-                            )
-                        }
-                    }
-            }
-            Text(
-                text = "Links open the provider's download page.",
-                style = WebTextStyles.xs,
-                color = Color(0x6BFFFFFF),
-                modifier = Modifier.padding(14.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ReportDialog(
-    viewModel: WatchViewModel,
-    onDismiss: () -> Unit,
-    onRefetch: () -> Unit,
-) {
-    val context = LocalContext.current
-    var type by remember { mutableStateOf("refetch") }
-    var note by remember { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
-    var done by remember { mutableStateOf(false) }
-
-    val reasons = listOf(
-        ReportReason("refetch", "Video won't play", "Black screen, error, or endless loading"),
-        ReportReason("wrong_metadata", "Wrong episode info", "Wrong titles, thumbnails, or air dates"),
-        ReportReason("wrong_count", "Wrong episode count", "Missing or extra episodes in the list"),
-        ReportReason("wrong_video", "Wrong anime or episode", "A different show or episode plays here"),
-        ReportReason("out_of_sync", "Episodes are shifted", "Right show, but the numbering is offset"),
-        ReportReason("other", "Something else", ""),
-    )
-
-    SiteDialog(
-        title = "Report",
-        onDismiss = onDismiss,
-    ) {
-        if (done) {
-            Column(
-                Modifier.fillMaxWidth().padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = null,
-                    tint = LocalAnikageTheme.current.action,
-                    modifier = Modifier.size(26.dp),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Thanks — report sent to the team",
+                    text = "You're watching the downloaded copy of this episode.",
                     style = WebTextStyles.sm,
-                    color = Color.White,
+                    color = Color(0xFF6EE7B7),
                 )
+                Spacer(Modifier.height(12.dp))
+                SiteDialogButton(label = "Stream instead", primary = true, enabled = true) {
+                    viewModel.playStreamVersion()
+                    onDismiss()
+                }
             }
-        } else {
-            reasons.forEach { reason ->
+        }
+
+        // Completed download for this episode -> play it.
+        state.downloaded?.let { row ->
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Filled.DownloadDone, null, tint = Color(0xFF34D399), modifier = Modifier.size(18.dp))
+                    Text(
+                        text = "Downloaded — ${row.quality}, ${row.sizeBytes / 1_000_000} MB",
+                        style = WebTextStyles.sm,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SiteDialogButton(label = "Play download", primary = true, enabled = true) {
+                        viewModel.playDownloadedCopy()
+                        onDismiss()
+                    }
+                    SiteDialogButton(label = "Delete", primary = false, enabled = true) {
+                        EpisodeDownloadEngine.deleteDownloaded(context, row.downloadKey)
+                        viewModel.refreshDownloadedForEpisode(state.episode)
+                    }
+                }
+            }
+        }
+
+        // Active / paused / failed downloads for this episode.
+        engineStates.filter { it.status != EpisodeDownloadEngine.Status.COMPLETED }.forEach { dl ->
+            DownloadProgressRow(
+                state = dl,
+                onPause = { EpisodeDownloadEngine.pause(dl.key) },
+                onResume = { EpisodeDownloadEngine.resume(context, dl.key) },
+                onRetry = { EpisodeDownloadEngine.retry(context, dl.key) },
+                onCancel = { EpisodeDownloadEngine.cancel(context, dl.key) },
+            )
+        }
+
+        // Quality picker (resolves the real HLS renditions).
+        if (state.downloadQualitiesLoading) {
+            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = theme.action, strokeWidth = 2.dp)
+            }
+        } else if (state.downloadQualitiesError != null) {
+            Text(
+                text = state.downloadQualitiesError ?: "",
+                style = WebTextStyles.sm,
+                color = Color(0xFFFCA5A5),
+                modifier = Modifier.padding(16.dp),
+            )
+        } else if (state.slug != null) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
+                Text(
+                    text = "DOWNLOAD TO THIS DEVICE",
+                    style = WebTextStyles.xs2,
+                    color = theme.fgMuted,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.sp,
+                )
+            }
+            state.downloadQualities.forEach { q ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (type == reason.value) Color(0x14FFFFFF) else Color.Transparent)
-                        .clickable { type = reason.value }
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(reason.label, style = WebTextStyles.sm, color = Color.White, fontWeight = FontWeight.Medium)
-                        if (reason.hint.isNotEmpty()) {
-                            Text(reason.hint, style = WebTextStyles.xs, color = Color(0x6BFFFFFF))
+                        .clickable {
+                            viewModel.startDownload(q.height)
                         }
-                    }
-                    if (type == reason.value) {
-                        Icon(
-                            Icons.Filled.RadioButtonChecked,
-                            contentDescription = null,
-                            tint = LocalAnikageTheme.current.action,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        text = q.label,
+                        style = WebTextStyles.sm,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Icon(
+                        Icons.Filled.FileDownload,
+                        contentDescription = null,
+                        tint = theme.fgMuted,
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
             }
-            // Note field (site: textarea).
-            OutlinedTextFieldSite(
-                value = note,
-                onValueChange = { note = it },
-                placeholder = "Anything else we should know? (optional)",
+            Text(
+                text = "Downloads include the softsub subtitles and play offline inside Anikage.",
+                style = WebTextStyles.xs,
+                color = Color(0x6BFFFFFF),
+                modifier = Modifier.padding(14.dp),
             )
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(horizontal = 12.dp)) {
-                SiteDialogButton(
-                    label = if (type == "refetch") "Fix it" else "Send report",
-                    primary = true,
-                    enabled = !sending,
-                ) {
-                    if (type == "refetch") {
-                        onRefetch()
-                    } else {
-                        sending = true
-                        viewModel.submitReport(type, note) { success ->
-                            sending = false
-                            if (success) done = true
-                            else android.widget.Toast.makeText(context, "Could not send report", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-                SiteDialogButton(label = "Cancel", primary = false, enabled = true, onClick = onDismiss)
-            }
-            Spacer(Modifier.height(12.dp))
+        } else {
+            Text(
+                text = "This anime isn't in the Anikage catalogue, so it can't be downloaded.",
+                style = WebTextStyles.sm,
+                color = Color(0xFFD4D4D8),
+                modifier = Modifier.padding(16.dp),
+            )
+        }
+
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(
+                text = "View all downloads",
+                style = WebTextStyles.xs,
+                color = theme.action,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenDownloads)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+            )
         }
     }
 }
 
-private data class ReportReason(val value: String, val label: String, val hint: String)
+/** One download's live progress row (pause / resume / retry / cancel). */
+@Composable
+private fun DownloadProgressRow(
+    state: EpisodeDownloadEngine.DownloadState,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRetry: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x08FFFFFF))
+            .padding(12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            val label = when (state.status) {
+                EpisodeDownloadEngine.Status.DOWNLOADING -> "${(state.progress * 100).toInt()}%"
+                EpisodeDownloadEngine.Status.PAUSED -> "Paused"
+                EpisodeDownloadEngine.Status.FAILED -> "Failed"
+                EpisodeDownloadEngine.Status.RESOLVING -> "Resolving…"
+                EpisodeDownloadEngine.Status.QUEUED -> "Queued"
+                EpisodeDownloadEngine.Status.COMPLETED -> "Done"
+            }
+            Text(
+                text = label,
+                style = WebTextStyles.sm,
+                color = when (state.status) {
+                    EpisodeDownloadEngine.Status.FAILED -> Color(0xFFFCA5A5)
+                    EpisodeDownloadEngine.Status.PAUSED -> Color(0xFFFBBF24)
+                    else -> Color.White
+                },
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = state.qualityLabel + " · " + formatBytes(state.bytesDone),
+                style = WebTextStyles.xs,
+                color = theme.fgMuted,
+            )
+            Spacer(Modifier.weight(1f))
+            when (state.status) {
+                EpisodeDownloadEngine.Status.DOWNLOADING -> {
+                    Text("Pause", style = WebTextStyles.xs, color = Color.White, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x1FFFFFFF))
+                            .clickable(onClick = onPause)
+                            .padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+                EpisodeDownloadEngine.Status.PAUSED -> {
+                    Text("Resume", style = WebTextStyles.xs, color = theme.actionFg, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(theme.action)
+                            .clickable(onClick = onResume)
+                            .padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+                EpisodeDownloadEngine.Status.FAILED -> {
+                    Text("Retry", style = WebTextStyles.xs, color = theme.actionFg, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(theme.action)
+                            .clickable(onClick = onRetry)
+                            .padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+                else -> {}
+            }
+            if (state.status != EpisodeDownloadEngine.Status.COMPLETED) {
+                Text("Cancel", style = WebTextStyles.xs, color = Color(0xFFFCA5A5), fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0x14EF4444))
+                        .clickable(onClick = onCancel)
+                        .padding(horizontal = 10.dp, vertical = 5.dp))
+            }
+        }
+        if (state.status == EpisodeDownloadEngine.Status.DOWNLOADING || state.status == EpisodeDownloadEngine.Status.PAUSED) {
+            Spacer(Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0x14FFFFFF)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(state.progress)
+                        .fillMaxSize()
+                        .background(if (state.status == EpisodeDownloadEngine.Status.PAUSED) Color(0xFFFBBF24) else theme.action),
+                )
+            }
+            if (state.status == EpisodeDownloadEngine.Status.DOWNLOADING) {
+                Text(
+                    text = "${formatBytes(state.bytesPerSec)}/s · ${state.segmentsDone}/${state.segmentsTotal} segments",
+                    style = WebTextStyles.xs2,
+                    color = theme.fgMuted,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+        state.error?.let { err ->
+            Text(
+                text = err,
+                style = WebTextStyles.xs,
+                color = Color(0xFFFCA5A5),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1_000_000_000 -> "%.1f GB".format(bytes / 1e9)
+    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1e6)
+    bytes >= 1_000 -> "%d KB".format(bytes / 1_000)
+    else -> "$bytes B"
+}
+
+/** Avatar fallback color from the author's initial. */
+private fun avatarColor(initial: String): Color {
+    val colors = listOf(
+        Color(0xFF7C3AED), Color(0xFF2563EB), Color(0xFF0891B2), Color(0xFF059669),
+        Color(0xFFD97706), Color(0xFFDC2626), Color(0xFFDB2777), Color(0xFF4F46E5),
+    )
+    return colors[(initial.hashCode().let { if (it < 0) -it else it }) % colors.size]
+}
+
+/** Live download status card under the meta row (current episode). */
+@Composable
+private fun EpisodeDownloadCard(
+    animeId: Int,
+    state: WatchUiState,
+    downloadStates: List<EpisodeDownloadEngine.DownloadState>,
+    onOpenDownloads: () -> Unit,
+    horizontalPadding: PaddingValues = PaddingValues(horizontal = 0.dp),
+) {
+    val context = LocalContext.current
+    val theme = LocalAnikageTheme.current
+    val dl = downloadStates.firstOrNull { it.animeId == animeId && it.episode == state.episode } ?: return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontalPadding)
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x08FFFFFF))
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(
+                Icons.Filled.FileDownload,
+                contentDescription = null,
+                tint = theme.action,
+                modifier = Modifier.size(15.dp),
+            )
+            Text(
+                text = when (dl.status) {
+                    EpisodeDownloadEngine.Status.DOWNLOADING -> "Downloading — ${(dl.progress * 100).toInt()}%"
+                    EpisodeDownloadEngine.Status.PAUSED -> "Download paused"
+                    EpisodeDownloadEngine.Status.FAILED -> "Download failed"
+                    EpisodeDownloadEngine.Status.RESOLVING -> "Preparing download…"
+                    EpisodeDownloadEngine.Status.QUEUED -> "Queued"
+                    EpisodeDownloadEngine.Status.COMPLETED -> "Downloaded"
+                },
+                style = WebTextStyles.sm,
+                color = theme.fg,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.weight(1f))
+            when (dl.status) {
+                EpisodeDownloadEngine.Status.DOWNLOADING -> {
+                    Text("Pause", style = WebTextStyles.xs, color = Color.White, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x1FFFFFFF))
+                            .clickable { EpisodeDownloadEngine.pause(dl.key) }
+                            .padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+                EpisodeDownloadEngine.Status.PAUSED, EpisodeDownloadEngine.Status.FAILED -> {
+                    Text(
+                        if (dl.status == EpisodeDownloadEngine.Status.PAUSED) "Resume" else "Retry",
+                        style = WebTextStyles.xs, color = theme.actionFg, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(theme.action)
+                            .clickable {
+                                if (dl.status == EpisodeDownloadEngine.Status.PAUSED) {
+                                    EpisodeDownloadEngine.resume(context, dl.key)
+                                } else {
+                                    EpisodeDownloadEngine.retry(context, dl.key)
+                                }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+                else -> {}
+            }
+            Text("View", style = WebTextStyles.xs, color = theme.fgMuted, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenDownloads)
+                    .padding(horizontal = 8.dp, vertical = 5.dp))
+        }
+        if (dl.status == EpisodeDownloadEngine.Status.DOWNLOADING || dl.status == EpisodeDownloadEngine.Status.PAUSED) {
+            Spacer(Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0x14FFFFFF)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(dl.progress)
+                        .fillMaxSize()
+                        .background(if (dl.status == EpisodeDownloadEngine.Status.PAUSED) Color(0xFFFBBF24) else theme.action),
+                )
+            }
+        }
+    }
+}
+
 
 /**
- * "Add to List" sheet — the site's list sync needs an anikage.cc account
- * (auth.anikage.cc SSO). The app is account-free, so this opens the site's
- * watch page in the browser where the user is signed in. Honest, real action
- * — not a dead button.
+ * "Add to List" sheet — the app's LOCAL anime list (device-side; the site's
+ * list needs an anikage.cc account). Statuses mirror the site's list
+ * statuses; the player's bookmark quick menu edits the same data.
  */
 @Composable
-private fun ListSheet(onDismiss: () -> Unit) {
+private fun ListSheet(
+    viewModel: WatchViewModel,
+    onDismiss: () -> Unit,
+) {
+    val theme = LocalAnikageTheme.current
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     SiteDialog(title = "Add to List", onDismiss = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(20.dp)) {
             Text(
-                text = "List syncing uses your Anikage account. Open the site to manage your list — " +
-                    "watch progress saved in this app stays here on your device.",
+                text = "Your list is stored on this device — no account needed.",
                 style = WebTextStyles.sm,
                 color = Color(0xFFA1A1AA),
                 lineHeight = 19.sp,
             )
             Spacer(Modifier.height(14.dp))
-            SiteDialogButton(label = "Open anikage.cc", primary = true, enabled = true) {
-                runCatching {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(Config.ANIKAGE_SITE_ORIGIN)),
+            listOf(
+                "watching" to "Watching",
+                "planned" to "Plan to Watch",
+                "completed" to "Completed",
+                "on_hold" to "On Hold",
+                "dropped" to "Dropped",
+            ).forEach { (key, label) ->
+                val selected = state.listStatus == key
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (selected) Color(0x14FFFFFF) else Color.Transparent)
+                        .clickable {
+                            viewModel.setListStatus(if (selected) null else key)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        text = label,
+                        style = WebTextStyles.sm,
+                        color = if (selected) theme.action else Color.White,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
                     )
+                    if (selected) {
+                        Icon(Icons.Default.Check, contentDescription = null, tint = theme.action, modifier = Modifier.size(16.dp))
+                    }
                 }
-                onDismiss()
             }
+            if (state.listStatus != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Remove from list",
+                    style = WebTextStyles.sm,
+                    color = Color(0xFFFCA5A5),
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0x14EF4444))
+                        .clickable { viewModel.setListStatus(null) }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            SiteDialogButton(label = "Done", primary = true, enabled = true, onClick = onDismiss)
         }
     }
 }
@@ -1516,15 +1781,19 @@ private fun LangChip(label: String, active: Boolean, onClick: () -> Unit) {
     )
 }
 
-/** site episode row — h-76 thumb + play overlay + title + badges. */
+/** site episode row — thumb + number + title + filler + watched + progress. */
 @Composable
 private fun EpisodeRow(
     ep: EpisodeItem,
     active: Boolean,
+    progress: EpisodeProgress?,
+    downloaded: Boolean,
     onClick: () -> Unit,
     horizontalPadding: PaddingValues = PaddingValues(horizontal = 16.dp),
 ) {
     val theme = LocalAnikageTheme.current
+    val watched = progress?.watched == true
+    val inProgress = progress?.inProgress == true
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1559,6 +1828,10 @@ private fun EpisodeRow(
                     )
                 }
             }
+            // Watched: dim the thumbnail (site: watched episodes fade).
+            if (watched) {
+                Box(Modifier.fillMaxSize().background(Color(0x66000000)))
+            }
             // Active episode: play overlay.
             if (active) {
                 Box(
@@ -1587,31 +1860,122 @@ private fun EpisodeRow(
                     .background(theme.surface.copy(alpha = 0.85f))
                     .padding(horizontal = 6.dp, vertical = 3.dp),
             )
+            // Downloaded badge.
+            if (downloaded) {
+                Icon(
+                    Icons.Filled.DownloadDone,
+                    contentDescription = "Downloaded",
+                    tint = Color(0xFF34D399),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(20.dp),
+                )
+            }
+            // Watched checkmark.
+            if (watched && !active) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "Watched",
+                    tint = Color(0xFF34D399),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(30.dp)
+                        .background(Color(0x8C000000), CircleShape)
+                        .padding(5.dp),
+                )
+            }
+            // Watch progress bar along the bottom of the thumbnail.
+            if (inProgress && progress != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(Color(0x33FFFFFF)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(progress.fraction)
+                            .fillMaxSize()
+                            .background(if (active) theme.action else Color(0xFF34D399)),
+                    )
+                }
+            }
         }
         Column(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 12.dp),
         ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = ep.number.toString(),
+                    style = WebTextStyles.sm,
+                    color = if (active) theme.action else theme.fg,
+                    fontWeight = FontWeight.Bold,
+                )
+                if (ep.isFiller) {
+                    Text(
+                        text = "FILLER",
+                        style = WebTextStyles.xs2,
+                        color = Color(0xFFFDBA74),
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x1AFB923C))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                } else if (ep.isRecap) {
+                    Text(
+                        text = "RECAP",
+                        style = WebTextStyles.xs2,
+                        color = theme.fgMuted,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x14FFFFFF))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+                if (downloaded) {
+                    Text(
+                        text = "OFFLINE",
+                        style = WebTextStyles.xs2,
+                        color = Color(0xFF6EE7B7),
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x1A34D399))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
+            }
             Text(
-                text = if (ep.title.startsWith("Episode")) "${ep.number}." else ep.title,
+                text = if (ep.title.startsWith("Episode")) "Episode ${ep.number}" else ep.title,
                 style = WebTextStyles.sm,
                 color = if (active) theme.fg.copy(alpha = 0.90f) else theme.fg,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp),
             )
-            if (ep.isFiller) {
+            if (watched) {
                 Text(
-                    text = "Filler",
+                    text = "Watched",
                     style = WebTextStyles.xs,
-                    color = Color(0xFFFB923C),
+                    color = Color(0xFF34D399),
+                    modifier = Modifier.padding(top = 2.dp),
                 )
-            } else if (ep.isRecap) {
+            } else if (inProgress && progress != null) {
                 Text(
-                    text = "Recap",
+                    text = "${(progress.fraction * 100).toInt()}% watched",
                     style = WebTextStyles.xs,
                     color = theme.fgMuted,
+                    modifier = Modifier.padding(top = 2.dp),
                 )
             }
         }
@@ -1622,7 +1986,12 @@ private fun EpisodeRow(
 //  Comments — site: header card ("N Comments" + EP pill) + list
 // ---------------------------------------------------------------------------
 
-private val AvatarBase = "https://auth.anikage.cc"
+private val AvatarBase = com.anikage.app.Config.ANIKAGE_SITE_ORIGIN
+
+/** Full avatar URL: the API returns site-relative paths (/assets/…). */
+private fun avatarUrl(path: String?): String? = path?.let {
+    if (it.startsWith("http")) it else "$AvatarBase$it"
+}
 
 @Composable
 private fun CommentsSection(
@@ -1753,22 +2122,51 @@ private fun CommentRow(comment: AnikageComment) {
             .padding(vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        AsyncImage(
-            model = comment.author?.avatar?.let { "$AvatarBase$it" },
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
+        // Avatar with initial-letter fallback (never a blank hole).
+        val author = comment.author
+        val displayName = author?.displayName ?: author?.username ?: "Anonymous"
+        Box(
             modifier = Modifier
                 .size(32.dp)
                 .clip(CircleShape)
                 .background(theme.surfaceElevated),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            val url = avatarUrl(author?.avatar)
+            if (url != null) {
+                coil.compose.AsyncImage(
+                    model = url,
+                    contentDescription = displayName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (url == null) {
+                // Fallback: colored circle with the author's initial.
+                val initial = displayName.firstOrNull()?.uppercase() ?: "?"
+                val bg = avatarColor(initial)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(bg, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = initial,
+                        style = WebTextStyles.sm,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = comment.author?.displayName ?: comment.author?.username ?: "Anonymous",
+                    text = displayName,
                     style = WebTextStyles.xs,
                     color = theme.fg,
                     fontWeight = FontWeight.SemiBold,

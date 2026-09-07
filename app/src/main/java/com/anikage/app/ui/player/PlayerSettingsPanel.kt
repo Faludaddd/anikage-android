@@ -354,6 +354,58 @@ private fun QualityPage(state: WatchUiState, viewModel: WatchViewModel) {
 
 @Composable
 private fun MorePage(context: android.content.Context) {
+    PanelGroupLabel("Seeking")
+    var seekAmount by remember { mutableStateOf(SettingsState.seekAmountSec) }
+    LaunchedEffect(seekAmount) {
+        if (seekAmount != SettingsState.seekAmountSec) {
+            SettingsState.setSeekAmountSec(context, seekAmount)
+        }
+    }
+    SliderCard(
+        strongValue = "${seekAmount}s",
+        value = seekAmount.toFloat(),
+        valueRange = 5f..60f,
+        onValueChange = { seekAmount = it.toInt() },
+        labelStart = "5s",
+        labelEnd = "60s",
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(horizontal = 10.dp)) {
+        listOf(5, 10, 15, 30).forEach { s ->
+            OptionChip(
+                label = "${s}s",
+                selected = seekAmount == s,
+                onClick = { seekAmount = s },
+            )
+        }
+    }
+    ToggleRow(
+        label = "Double-tap seek",
+        description = "Tap twice on the left/right edge to seek ±${seekAmount}s.",
+        checked = SettingsState.doubleTapSeek,
+        onCheckedChange = { SettingsState.setDoubleTapSeek(context, it) },
+    )
+    ToggleRow(
+        label = "Press & hold to speed up",
+        description = "Hold the video to play at a faster speed; release to restore.",
+        checked = SettingsState.holdToSpeedEnabled,
+        onCheckedChange = { SettingsState.setHoldToSpeedEnabled(context, it) },
+    )
+    if (SettingsState.holdToSpeedEnabled) {
+        var holdRate by remember { mutableStateOf(SettingsState.holdSpeedRate) }
+        LaunchedEffect(holdRate) {
+            if (holdRate != SettingsState.holdSpeedRate) {
+                SettingsState.setHoldSpeedRate(context, holdRate)
+            }
+        }
+        SliderCard(
+            strongValue = "${holdRate}x",
+            value = holdRate,
+            valueRange = 1.5f..3f,
+            onValueChange = { holdRate = (it * 100).toInt() / 100f },
+            labelStart = "1.5x",
+            labelEnd = "3x",
+        )
+    }
     PanelGroupLabel("Automation")
     ToggleRow(
         label = "Autoplay video",
@@ -367,6 +419,22 @@ private fun MorePage(context: android.content.Context) {
         checked = SettingsState.autonext,
         onCheckedChange = { SettingsState.setAutonext(context, it) },
     )
+    if (SettingsState.autonext) {
+        var countdown by remember { mutableStateOf(SettingsState.autonextCountdownSec) }
+        LaunchedEffect(countdown) {
+            if (countdown != SettingsState.autonextCountdownSec) {
+                SettingsState.setAutonextCountdownSec(context, countdown)
+            }
+        }
+        SliderCard(
+            strongValue = if (countdown == 0) "Instant" else "${countdown}s",
+            value = countdown.toFloat(),
+            valueRange = 0f..30f,
+            onValueChange = { countdown = it.toInt() },
+            labelStart = "Instant",
+            labelEnd = "30s",
+        )
+    }
     ToggleRow(
         label = "Skip intro / outro",
         description = "Automatically skip detected openings and endings.",
@@ -378,6 +446,12 @@ private fun MorePage(context: android.content.Context) {
         description = "Skip filler episodes when auto-advancing.",
         checked = SettingsState.skipFillers,
         onCheckedChange = { SettingsState.setSkipFillers(context, it) },
+    )
+    ToggleRow(
+        label = "Remember position",
+        description = "Save your playback position and auto-resume episodes.",
+        checked = SettingsState.rememberPosition,
+        onCheckedChange = { SettingsState.setRememberPosition(context, it) },
     )
     ToggleRow(
         label = "Ambient mode",
@@ -446,6 +520,15 @@ private fun CaptionStylesPage(context: android.content.Context) {
         onValueChange = { update(styles.copy(textBgOpacity = it)) },
         labelStart = "0%",
         labelEnd = "100%",
+    )
+    PanelGroupLabel("Position")
+    SliderCard(
+        strongValue = "${(styles.position * 100).toInt()}%",
+        value = styles.position,
+        valueRange = 0f..0.4f,
+        onValueChange = { update(styles.copy(position = (it * 100).toInt() / 100f)) },
+        labelStart = "Bottom",
+        labelEnd = "Higher",
     )
     PanelGroupLabel("Reset")
     ResetRow(enabled = styles != CaptionStyles()) {
@@ -661,7 +744,7 @@ private fun SliderCard(
     strongValue: String,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
-    steps: Int,
+    steps: Int = 0,
     onValueChange: (Float) -> Unit,
     labelStart: String,
     labelEnd: String,

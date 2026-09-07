@@ -63,3 +63,50 @@ interface WatchProgressDao {
     @Query("DELETE FROM watch_progress WHERE animeId = :animeId")
     suspend fun clearForAnime(animeId: Int)
 }
+
+@Dao
+interface DownloadedEpisodeDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: DownloadedEpisodeEntity)
+
+    @Query("SELECT * FROM downloaded_episodes ORDER BY downloadedAt DESC")
+    fun observeAll(): Flow<List<DownloadedEpisodeEntity>>
+
+    @Query("SELECT * FROM downloaded_episodes ORDER BY downloadedAt DESC")
+    suspend fun all(): List<DownloadedEpisodeEntity>
+
+    @Query("SELECT * FROM downloaded_episodes WHERE animeId = :animeId ORDER BY episode ASC")
+    suspend fun forAnime(animeId: Int): List<DownloadedEpisodeEntity>
+
+    @Query("SELECT * FROM downloaded_episodes WHERE downloadKey = :key")
+    suspend fun get(key: String): DownloadedEpisodeEntity?
+
+    @Query("SELECT * FROM downloaded_episodes WHERE animeId = :animeId AND episode = :episode LIMIT 1")
+    suspend fun forEpisode(animeId: Int, episode: Int): DownloadedEpisodeEntity?
+
+    @Query("DELETE FROM downloaded_episodes WHERE downloadKey = :key")
+    suspend fun delete(key: String)
+}
+
+@Dao
+interface AnimeListDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(item: AnimeListEntity)
+
+    @Query("SELECT * FROM anime_list ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<AnimeListEntity>>
+
+    @Query("SELECT * FROM anime_list ORDER BY updatedAt DESC")
+    suspend fun all(): List<AnimeListEntity>
+
+    @Query("SELECT * FROM anime_list WHERE animeId = :animeId")
+    suspend fun get(animeId: Int): AnimeListEntity?
+
+    @Query("SELECT * FROM anime_list WHERE status = :status ORDER BY updatedAt DESC")
+    suspend fun byStatus(status: String): List<AnimeListEntity>
+
+    @Query("DELETE FROM anime_list WHERE animeId = :animeId")
+    suspend fun delete(animeId: Int)
+}

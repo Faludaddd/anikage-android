@@ -37,8 +37,9 @@ object Routes {
     const val DETAILS = "details/{id}"
     fun details(id: Int) = "details/$id"
 
-    /** Watch — `slug` is optional (query param) so old links still work. */
-    const val WATCH = "watch/{id}?ep={episode}&slug={slug}"
+    /** Watch — `slug` is optional (query param) so old links still work.
+     *  `file` (URL-encoded path) plays a downloaded episode offline. */
+    const val WATCH = "watch/{id}?ep={episode}&slug={slug}&file={file}"
 
     /**
      * episode = 0 means AUTO-RESUME: the watch screen continues from the
@@ -46,8 +47,13 @@ object Routes {
      * no ?ep= is given). Any positive value pins that exact episode
      * (schedule entries, episode rows, "next episode").
      */
-    fun watch(id: Int, episode: Int, slug: String? = null): String =
-        "watch/$id?ep=$episode" + (slug?.let { "&slug=$it" } ?: "")
+    fun watch(id: Int, episode: Int, slug: String? = null, file: String? = null): String =
+        "watch/$id?ep=$episode" +
+            (slug?.let { "&slug=$it" } ?: "") +
+            (file?.let { "&file=${java.net.URLEncoder.encode(it, "UTF-8")}" } ?: "&file=")
+
+    /** In-app downloads manager (episode files saved on this device). */
+    const val DOWNLOADS = "downloads"
 
     /** Music info player — site: /music/info?slug={slug}&type={OP1|ED1…}. */
     const val MUSIC_INFO = "music_info/{slug}?type={type}"
@@ -65,6 +71,6 @@ object Routes {
 
     /** Account pages use their own back headers (site: /(account) layout). */
     val accountScreens: List<String> = listOf(
-        SETTINGS, NOTIFICATIONS, ABOUT, DMCA,
+        SETTINGS, NOTIFICATIONS, ABOUT, DMCA, DOWNLOADS,
     )
 }

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -280,6 +281,7 @@ private fun ProfileDropdown(
     val theme = LocalAnikageTheme.current
     val items = listOf(
         ProfileMenuItem("Settings", Icons.Outlined.Settings, "settings"),
+        ProfileMenuItem("Downloads", Icons.Outlined.Download, "downloads"),
         ProfileMenuItem("Notifications", Icons.Outlined.Notifications, "notifications"),
         ProfileMenuItem("Diagnostics", Icons.Outlined.BugReport, "diagnostics"),
         ProfileMenuItem("About", Icons.Outlined.Info, "about"),

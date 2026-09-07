@@ -16,6 +16,9 @@ class AnikageApp : Application() {
         AppLogger.init(this)
         // Restore persisted user settings (site's localStorage equivalents).
         com.anikage.app.core.settings.SettingsState.init(this)
+        // Reconcile in-app download states with the DB + partial files left
+        // by a previous process (paused downloads stay resumable).
+        com.anikage.app.core.download.EpisodeDownloadEngine.restoreCompleted(this)
         AppLogger.i(
             LogCategory.APP,
             "Anikage starting — v${Config.APP_VERSION} (code ${Config.APP_VERSION_CODE}), " +

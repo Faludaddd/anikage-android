@@ -17,6 +17,8 @@ import com.anikage.app.core.data.api.AnikageServer
 import com.anikage.app.core.data.api.AnikageSourcesResponse
 import com.anikage.app.core.data.db.AnikageDatabase
 import com.anikage.app.core.data.db.AnimeCacheEntity
+import com.anikage.app.core.data.db.AnimeListEntity
+import com.anikage.app.core.data.db.DownloadedEpisodeEntity
 import com.anikage.app.core.data.db.DetailCacheEntity
 import com.anikage.app.core.data.db.RecentlyViewedEntity
 import com.anikage.app.core.data.db.WatchProgressEntity
@@ -976,6 +978,59 @@ class AnikageRepository private constructor(
     suspend fun loadProgressForAnime(animeId: Int): List<WatchProgressEntity> =
         withContext(Dispatchers.IO) {
             watchProgressDao.forAnime(animeId)
+        }
+
+    // -------------------------------------------------------------------------
+    //  Downloaded episodes + local anime list (in-app download engine + UI)
+    // -------------------------------------------------------------------------
+
+    suspend fun downloadedEpisode(animeId: Int, episode: Int): DownloadedEpisodeEntity? =
+        withContext(Dispatchers.IO) {
+            db.downloadedEpisodeDao().forEpisode(animeId, episode)
+        }
+
+    suspend fun allDownloadedEpisodes(): List<DownloadedEpisodeEntity> =
+        withContext(Dispatchers.IO) {
+            db.downloadedEpisodeDao().all()
+        }
+
+    suspend fun downloadedForAnime(animeId: Int): List<DownloadedEpisodeEntity> =
+        withContext(Dispatchers.IO) {
+            db.downloadedEpisodeDao().forAnime(animeId)
+        }
+
+    suspend fun getListStatus(animeId: Int): String? =
+        withContext(Dispatchers.IO) {
+            db.animeListDao().get(animeId)?.status
+        }
+
+    suspend fun setListStatus(
+        animeId: Int,
+        status: String?,
+        titleRomaji: String? = null,
+        titleEnglish: String? = null,
+        posterUrl: String? = null,
+        coverColor: String? = null,
+    ) = withContext(Dispatchers.IO) {
+        if (status == null) {
+            db.animeListDao().delete(animeId)
+        } else {
+            db.animeListDao().upsert(
+                AnimeListEntity(
+                    animeId = animeId,
+                    status = status,
+                    titleRomaji = titleRomaji,
+                    titleEnglish = titleEnglish,
+                    posterUrl = posterUrl,
+                    coverColor = coverColor,
+                )
+            )
+        }
+    }
+
+    suspend fun localAnimeList(): List<AnimeListEntity> =
+        withContext(Dispatchers.IO) {
+            db.animeListDao().all()
         }
 
     // -------------------------------------------------------------------------

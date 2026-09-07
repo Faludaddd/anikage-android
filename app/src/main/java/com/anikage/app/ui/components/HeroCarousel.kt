@@ -39,10 +39,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -53,11 +55,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.ImageRequest
 import com.anikage.app.Config
 import com.anikage.app.core.data.model.Anime
 import com.anikage.app.core.theme.LocalAnikageTheme
@@ -97,6 +102,7 @@ fun HeroCarousel(
 ) {
     if (items.isEmpty()) return
     val theme = LocalAnikageTheme.current
+    val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val isWide = configuration.screenWidthDp >= 600
     // Site: h-[72vh] mobile · 90vh tablet · h-screen desktop.
@@ -111,47 +117,102 @@ fun HeroCarousel(
     val totalItems = items.size
     // Swipeable hero: HorizontalPager gives native drag + snap + momentum;
     // arrows stay as secondary controls (site keeps them too).
+    // beyondBoundsPageCount = 1: the NEIGHBOUR slides stay composed, so
+    // their artwork is loaded BEFORE the swipe starts — no black slides
+    // mid-transition, ever (the old black-image bug).
     val pagerState = rememberPagerState(pageCount = { totalItems })
     var progress by remember(items) { mutableFloatStateOf(0f) }
 
+    // Last user touch on the hero — pauses auto-advance so a programmed
+    // scroll can NEVER fight the user's drag (the old "inconsistent
+    // swiping" bug: the timer fired between touch-down and scroll-start,
+    // and animateScrollToPage cancelled the gesture). The parent Box's
+    // pointerInput observes raw touch-downs without consuming them.
+    var lastTouchMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling) lastTouchMs = System.currentTimeMillis()
+        }
+    }
+
+    // Preload neighbour artwork into Coil's caches so swipes are instant.
+    LaunchedEffect(pagerState.currentPage, totalItems, items) {
+        val current = pagerState.currentPage
+        val neighbours = listOf(current - 1, current + 1)
+            .map { (it + totalItems) % totalItems }
+            .filter { it in items.indices }
+            .distinct()
+        neighbours.forEach { idx ->
+            val candidate = items[idx].fanartUrl ?: items[idx].bannerImage ?: items[idx].coverUrl()
+            val logo = items[idx].clearLogoUrl
+            listOfNotNull(candidate, logo).forEach { url ->
+                if (url != null) {
+                    val request = ImageRequest.Builder(context)
+                        .data(url)
+                        .memoryCacheKey(url)
+                        .build()
+                    runCatching { context.imageLoader.enqueue(request) }
+                }
+            }
+        }
+    }
+
     // Auto-advance with progress fill (site animates the active dot's fill).
     // Restarts on every page change (swipe, dot tap, arrow) so the fill
-    // always tracks the VISIBLE slide.
+    // always tracks the VISIBLE slide. While the user interacts the window
+    // RESETS (never fights the drag, and never dies so autoplay resumes).
     LaunchedEffect(pagerState.currentPage, totalItems) {
         if (totalItems < 2) return@LaunchedEffect
         progress = 0f
-        val start = System.currentTimeMillis()
-        while (System.currentTimeMillis() - start < slideMillis) {
+        var start = System.currentTimeMillis()
+        while (true) {
             delay(50)
-            progress = ((System.currentTimeMillis() - start).toFloat() / slideMillis).coerceIn(0f, 1f)
-        }
-        if (!pagerState.isScrollInProgress) {
-            pagerState.animateScrollToPage((pagerState.currentPage + 1) % totalItems)
+            if (pagerState.isScrollInProgress || System.currentTimeMillis() - lastTouchMs < 1500L) {
+                progress = 0f
+                start = System.currentTimeMillis()
+                continue
+            }
+            val elapsed = System.currentTimeMillis() - start
+            progress = (elapsed.toFloat() / slideMillis).coerceIn(0f, 1f)
+            if (elapsed >= slideMillis) {
+                if (!pagerState.isScrollInProgress) {
+                    pagerState.animateScrollToPage((pagerState.currentPage + 1) % totalItems)
+                }
+                break
+            }
         }
     }
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(heroHeight)
+            .height(heroHeight),
     ) {
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
+            beyondBoundsPageCount = 1, // preload neighbour slides (no black gaps)
         ) { page ->
             val current = items[page.coerceIn(0, totalItems - 1)]
-        // ── Layer 0: background artwork (TVDB fanart → AniList banner → cover)
-        AsyncImage(
-            model = current.fanartUrl ?: current.bannerImage ?: current.coverUrl(),
+            val isSettled = pagerState.currentPage == page && !pagerState.isScrollInProgress
+
+        // ── Layer 0: background artwork with a REAL fallback chain — if the
+        // TVDB fanart 404s or the network hiccups, the banner/cover art takes
+        // over instead of a black slide. Never a blank hero again.
+        HeroArtwork(
+            fanart = current.fanartUrl,
+            banner = current.bannerImage,
+            cover = current.coverUrl(),
             contentDescription = current.displayTitle(),
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
         )
 
         // ── Layer 0.5: muted trailer video (site: autoplayHeroTrailer plays
         // the YouTube trailer full-bleed beneath the same gradient stack).
+        // Only mounted on the SETTLED page — a WebView churn during swipes
+        // was exactly the "image turns black" trigger (the pager disposes
+        // off-screen pages; each remount reloaded a black WebView).
         if (com.anikage.app.core.settings.SettingsState.autoplayHeroTrailer &&
-            !current.trailerId.isNullOrBlank()
+            !current.trailerId.isNullOrBlank() && isSettled
         ) {
             HeroTrailerLayer(
                 trailerId = current.trailerId,
@@ -207,14 +268,31 @@ fun HeroCarousel(
             // TVDB clearlogo — the anime's title ARTWORK, not text.
             val clearLogo = current.clearLogoUrl
             if (clearLogo != null) {
-                AsyncImage(
-                    model = clearLogo,
-                    contentDescription = current.displayTitle(),
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .heightIn(max = if (isWide) 130.dp else 80.dp)
-                        .padding(bottom = 16.dp),
-                )
+                // Logo with error fallback to the styled title text — a dead
+                // logo URL no longer leaves a hole in the hero.
+                var logoFailed by remember(clearLogo) { mutableStateOf(false) }
+                if (!logoFailed) {
+                    AsyncImage(
+                        model = clearLogo,
+                        contentDescription = current.displayTitle(),
+                        contentScale = ContentScale.Fit,
+                        error = null,
+                        onError = { logoFailed = true },
+                        modifier = Modifier
+                            .heightIn(max = if (isWide) 130.dp else 80.dp)
+                            .padding(bottom = 16.dp),
+                    )
+                } else {
+                    Text(
+                        text = current.displayTitle(),
+                        style = WebTextStyles.titleHero,
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(bottom = 16.dp),
+                    )
+                }
             } else {
                 // Fallback only when the API payload has no logo (offline mode).
                 Text(
@@ -505,6 +583,44 @@ private fun HeroArrowButton(icon: ImageVector, onClick: () -> Unit) {
 }
 
 /**
+ * Hero background artwork with a candidate fallback chain:
+ * fanart -> banner -> cover. On load error the next candidate loads; the
+ * previous bitmap stays on screen until then (no black flash), and Coil's
+ * crossfade keeps the switch smooth. Only when ALL candidates fail does a
+ * dim placeholder color remain (never during normal swipes — neighbours
+ * are preloaded).
+ */
+@Composable
+private fun HeroArtwork(
+    fanart: String?,
+    banner: String?,
+    cover: String?,
+    contentDescription: String,
+) {
+    val candidates = remember(fanart, banner, cover) {
+        listOfNotNull(fanart, banner, cover)
+    }
+    val theme = LocalAnikageTheme.current
+    if (candidates.isEmpty()) {
+        Box(Modifier.fillMaxSize().background(theme.surfaceElevated))
+        return
+    }
+    var attempt by remember(candidates) { mutableIntStateOf(0) }
+    val url = candidates[attempt.coerceIn(0, candidates.lastIndex)]
+    AsyncImage(
+        model = ImageRequest.Builder(LocalContext.current)
+            .data(url)
+            .crossfade(220)
+            .memoryCacheKey(url)
+            .build(),
+        contentDescription = contentDescription,
+        contentScale = ContentScale.Crop,
+        onError = { if (attempt < candidates.lastIndex) attempt += 1 },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+/**
  * Muted, looping YouTube trailer layer — the site's autoplayHeroTrailer
  * setting: the spotlight slide's trailer plays full-bleed beneath the hero
  * gradient stack (youtube-nocookie iframe embed, no controls, muted,
@@ -523,7 +639,14 @@ private fun HeroTrailerLayer(
                 settings.mediaPlaybackRequiresUserGesture = false
                 settings.loadsImagesAutomatically = false
                 isClickable = false
-                webViewClient = android.webkit.WebViewClient()
+                // Transparent until the iframe paints — the artwork shows
+                // through instead of a black rectangle while YouTube loads.
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                        // Page finished: let the video layer show.
+                    }
+                }
                 loadUrl(
                     "https://www.youtube-nocookie.com/embed/$trailerId" +
                         "?autoplay=1&mute=1&loop=1&playlist=$trailerId" +

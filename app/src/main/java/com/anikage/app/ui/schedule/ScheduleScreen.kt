@@ -84,12 +84,12 @@ fun ScheduleScreen(
     val theme = LocalAnikageTheme.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
 
-    // Day grid columns — site: 1 / sm:2 / xl:3 / 2xl:4.
+    // Day grid columns — clean 2x2 grid on phones (user directive), then
+    // 3 / 4 on tablet / desktop widths.
     val columns = when {
         screenWidthDp >= 1280 -> 4
         screenWidthDp >= 840 -> 3
-        screenWidthDp >= 600 -> 2
-        else -> 1
+        else -> 2
     }
 
     var selectedDay by remember { mutableStateOf<String?>(null) }
@@ -142,7 +142,10 @@ fun ScheduleScreen(
                         modifier = Modifier.padding(top = 4.dp, bottom = 20.dp),
                     )
 
-                    // ── Day strip — 7 site-exact buttons with date numbers.
+                    // ── Day strip — full weekday names (Sunday…Saturday),
+                    // each in a square rounded card with a centered date
+                    // number + episode count. Selected = filled action card;
+                    // today = action ring. Scrollable, uniform, premium.
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -153,13 +156,15 @@ fun ScheduleScreen(
                             val selected = day.day == activeDay
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(1.dp),
+                                verticalArrangement = Arrangement.Center,
                                 modifier = Modifier
+                                    .width(76.dp)
+                                    .height(84.dp)
                                     .clip(RoundedCornerShape(16.dp))
                                     .background(
                                         when {
                                             selected -> theme.action
-                                            day.isToday -> theme.action.copy(alpha = 0.10f)
+                                            day.isToday -> theme.action.copy(alpha = 0.12f)
                                             else -> Color(0x08FFFFFF)
                                         }
                                     )
@@ -167,36 +172,40 @@ fun ScheduleScreen(
                                         1.dp,
                                         when {
                                             selected -> Color.Transparent
-                                            day.isToday -> theme.action.copy(alpha = 0.40f)
+                                            day.isToday -> theme.action.copy(alpha = 0.45f)
                                             else -> Color(0x0FFFFFFF)
                                         },
                                         RoundedCornerShape(16.dp),
                                     )
                                     .clickable { selectedDay = day.day }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    .padding(horizontal = 4.dp, vertical = 8.dp),
                             ) {
                                 Text(
-                                    text = day.shortDay.uppercase(),
-                                    style = WebTextStyles.xs2,
+                                    text = day.day.uppercase(),
+                                    style = WebTextStyles.xs2.copy(fontSize = 8.5.sp),
                                     color = when {
-                                        selected -> theme.actionFg.copy(alpha = 0.80f)
+                                        selected -> theme.actionFg.copy(alpha = 0.85f)
+                                        day.isToday -> theme.action
                                         else -> theme.fgMuted
                                     },
                                     fontWeight = FontWeight.SemiBold,
-                                    letterSpacing = 1.sp,
+                                    letterSpacing = 0.4.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 2.dp),
                                 )
-                                // Date number — always present (the fix).
+                                // Date number — BIG and dead-center.
                                 Text(
                                     text = day.dateOfMonth.toString(),
-                                    style = WebTextStyles.lg,
+                                    style = WebTextStyles.lg.copy(fontSize = 24.sp),
                                     color = if (selected) theme.actionFg else theme.fg,
                                     fontWeight = FontWeight.Bold,
-                                    lineHeight = 20.sp,
+                                    lineHeight = 30.sp,
                                 )
                                 Text(
                                     text = "${day.entries.size} ep",
-                                    style = WebTextStyles.xs2,
-                                    color = if (selected) theme.actionFg.copy(alpha = 0.70f) else theme.fgMuted,
+                                    style = WebTextStyles.xs2.copy(fontSize = 9.sp),
+                                    color = if (selected) theme.actionFg.copy(alpha = 0.75f) else theme.fgMuted,
                                     fontWeight = FontWeight.Medium,
                                 )
                             }
@@ -219,6 +228,7 @@ fun ScheduleScreen(
                             text = (activeDay ?: "Schedule") + if (active?.isToday == true) " · Today" else "",
                             style = WebTextStyles.titleSection,
                             color = theme.fg,
+                            fontWeight = FontWeight.SemiBold,
                         )
                         Text(
                             text = "${entries.size} episode" + if (entries.size == 1) "" else "s",
@@ -284,7 +294,7 @@ fun ScheduleScreen(
     }
 }
 
-/** Site row — group flex gap-3 rounded-xl border-fg/6 bg-fg/3 p-2. */
+/** Grid card — group flex gap-3 rounded-xl border-fg/6 bg-fg/3 p-2. */
 @Composable
 private fun ScheduleRow(schedule: AiringSchedule, onClick: () -> Unit) {
     val theme = LocalAnikageTheme.current
@@ -295,9 +305,9 @@ private fun ScheduleRow(schedule: AiringSchedule, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(Color(0x08FFFFFF))
-            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0x0FFFFFFF), RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
             .padding(8.dp),
     ) {
@@ -325,12 +335,12 @@ private fun ScheduleRow(schedule: AiringSchedule, onClick: () -> Unit) {
         ) {
             Text(
                 text = schedule.media.displayTitle(),
-                style = WebTextStyles.base,
+                style = WebTextStyles.sm,
                 color = theme.fg,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                lineHeight = 18.sp,
+                lineHeight = 17.sp,
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,

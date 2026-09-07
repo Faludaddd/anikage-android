@@ -212,6 +212,7 @@ fun AnikageApp() {
                         navArgument("id") { type = NavType.IntType },
                         navArgument("episode") { type = NavType.IntType; defaultValue = 1 },
                         navArgument("slug") { type = NavType.StringType; defaultValue = "" },
+                        navArgument("file") { type = NavType.StringType; defaultValue = "" },
                     ),
                 ) { backStackEntry ->
                     val id = backStackEntry.arguments?.getInt("id") ?: return@composable
@@ -219,14 +220,29 @@ fun AnikageApp() {
                     val slug = backStackEntry.arguments
                         ?.getString("slug")
                         ?.takeIf { it.isNotBlank() }
+                    val file = backStackEntry.arguments
+                        ?.getString("file")
+                        ?.takeIf { it.isNotBlank() }
                     WatchScreen(
                         animeId = id,
                         initialEpisode = ep,
                         slug = slug,
+                        localFile = file,
                         onBackClick = { navController.popBackStack() },
                         onOpenInfo = { infoId ->
                             AnimePreviewStore.byId(infoId)?.let { AnimePreviewStore.put(it) }
                             navController.navigate(Routes.details(infoId))
+                        },
+                        onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) { launchSingleTop = true } },
+                    )
+                }
+                composable(Routes.DOWNLOADS) {
+                    com.anikage.app.ui.downloads.DownloadsScreen(
+                        onBackClick = { navController.popBackStack() },
+                        onPlay = { dl ->
+                            navController.navigate(
+                                Routes.watch(dl.animeId, dl.episode, dl.slug, dl.filePath)
+                            ) { launchSingleTop = true }
                         },
                     )
                 }

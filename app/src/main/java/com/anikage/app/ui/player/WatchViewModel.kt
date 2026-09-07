@@ -21,13 +21,14 @@ import com.anikage.app.Config
 import com.anikage.app.core.data.AnikageRepository
 import com.anikage.app.core.data.api.AnikageComment
 import com.anikage.app.core.data.api.AnikageServer
-import com.anikage.app.core.data.api.AnikageSourcesResponse
-import com.anikage.app.core.data.api.AnikageStreamEmbed
+import com.anikage.app.core.data.db.DownloadedEpisodeEntity
 import com.anikage.app.core.data.model.AnimeDetails
+import com.anikage.app.core.download.EpisodeDownloadEngine
 import com.anikage.app.core.log.AppLogger
 import com.anikage.app.core.log.LogCategory
 import com.anikage.app.core.media.PlayerFactory
 import com.anikage.app.core.settings.SettingsState
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -45,6 +46,16 @@ data class EpisodeItem(
     val isFiller: Boolean = false,
     val isRecap: Boolean = false,
 )
+
+/** Per-episode watch progress for the episode list (watched state + bar). */
+data class EpisodeProgress(
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L,
+) {
+    val fraction: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    val watched: Boolean get() = durationMs > 0 && positionMs >= durationMs * 95 / 100
+    val inProgress: Boolean get() = positionMs > 10_000L && !watched
+}
 
 /** A subtitle track from the sources response (token -> proxy URL). */
 data class SubtitleTrack(
@@ -85,6 +96,19 @@ data class TrackOption(
     val groupIndex: Int = -1,
     val trackIndex: Int = -1,
     val isSelected: Boolean = false,
+)
+
+/** Download rendition choice for the in-app download dialog. */
+data class DownloadQualityOption(
+    val label: String,
+    val height: Int,
+)
+
+/** "Up next" card state — autonext countdown at the end of an episode. */
+data class NextUpState(
+    val episode: Int,
+    val title: String,
+    val countdownSec: Int,
 )
 
 data class CommentsUiState(
@@ -149,6 +173,23 @@ data class WatchUiState(
     val textTracks: List<TrackOption> = emptyList(),
     /** True once the app's own view POST was sent for the current episode. */
     val viewCounted: Boolean = false,
+    // ── episode progress + local list (episode list UI) ──────────────────
+    val episodeProgress: Map<Int, EpisodeProgress> = emptyMap(),
+    /** Local anime list status for this anime (null = not in list). */
+    val listStatus: String? = null,
+    // ── offline / downloaded playback ─────────────────────────────────────
+    /** Non-null when the player is playing a downloaded file (offline mode). */
+    val localFile: String? = null,
+    /** Completed in-app download record for the CURRENT episode (if any). */
+    val downloaded: DownloadedEpisodeEntity? = null,
+    /** Download rendition choices resolved for the download dialog. */
+    val downloadQualities: List<DownloadQualityOption> = emptyList(),
+    val downloadQualitiesLoading: Boolean = false,
+    val downloadQualitiesError: String? = null,
+    /** Auto-next countdown card (site: "Playing next" overlay). */
+    val nextUp: NextUpState? = null,
+    /** Fillers skipped on the way to the current episode (toast info). */
+    val skippedFillerNotice: String? = null,
 ) {
     /** Servers that can serve the current SUB/DUB selection. */
     val availableServers: List<StreamServer>
@@ -158,6 +199,14 @@ data class WatchUiState(
 
     val hasIntro: Boolean get() = introStartMs >= 0 && introEndMs > introStartMs
     val hasOutro: Boolean get() = outroStartMs >= 0 && outroEndMs > outroStartMs
+
+    val currentEpisodeItem: EpisodeItem?
+        get() = episodes.firstOrNull { it.number == episode }
+
+    val isCurrentFiller: Boolean get() = currentEpisodeItem?.isFiller == true
+
+    /** Playing a downloaded copy right now (offline mode). */
+    val playingDownloaded: Boolean get() = localFile != null
 }
 
 /**
@@ -175,8 +224,12 @@ data class WatchUiState(
  *   6. token -> {PROXY}/m3u8/{token}, played through [PlayerFactory]'s
  *      OkHttp transport (guaranteed Origin/Referer headers + LRU cache).
  *
- * Every failure is surfaced (streamError / playbackError) so the user can
- * retry, switch servers, or open an E-server — never a silent black player.
+ * VIDEO SURFACE (the black-video-with-audio fix): the TextureView composable
+ * can attach BEFORE the player exists (player is built lazily when the first
+ * stream resolves) — `player()` therefore attaches the stored view when the
+ * player is created, and [attachSurface]/[detachSurface] are identity-guarded
+ * so the fullscreen swap (dispose old view -> compose new view) can never
+ * clear a NEWER attachment with the OLD view's release callback.
  */
 @OptIn(androidx.media3.common.util.UnstableApi::class)
 class WatchViewModel(
@@ -186,6 +239,8 @@ class WatchViewModel(
     /** 0 = auto-resume from watch progress (the site's /watch/{slug} behaviour). */
     private val initialEpisode: Int,
     initialSlug: String? = null,
+    /** When set, playback uses this downloaded file instead of the network. */
+    private val initialLocalFile: String? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -202,10 +257,6 @@ class WatchViewModel(
     private var player: ExoPlayer? = null
 
     // ── single-active-playback-session machinery (race-condition fix) ────
-    // One generation counter + one Job guarantee exactly one episode load
-    // is ever in flight; stale coroutines (user already switched episode /
-    // provider / left the screen) can no longer write state or start the
-    // player with an old URL.
     private var episodeJob: Job? = null
     private val episodeGen = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -223,10 +274,18 @@ class WatchViewModel(
     private var tickerJob: Job? = null
     private val viewSent = AtomicBoolean(false)
 
+    /** Guards the "no video track" check to run once per prepared item. */
+    private var checkedVideoTrackForItem = false
+
     /**
      * The player — built ONCE via [PlayerFactory] (OkHttp transport with the
      * Origin/Referer headers og.bakayaro.live requires, LRU cache, tuned
      * buffers). All settings (speed/volume/autonext) apply immediately.
+     *
+     * THE BLACK-VIDEO FIX: whenever the player is created here, the already
+     * registered TextureView (the UI usually composes BEFORE the first
+     * stream resolves) is attached — audio without video was exactly the
+     * missed-attach case.
      */
     fun player(): ExoPlayer = player ?: buildPlayer().also { p ->
         player = p
@@ -235,6 +294,10 @@ class WatchViewModel(
         applyVolumeTo(p)
         p.setPlaybackSpeed(SettingsState.playbackRate)
         p.addListener(playerListener)
+        textureView?.let { view ->
+            p.setVideoTextureView(view)
+            AppLogger.d(LogCategory.PLAYER, "Video surface attached to a fresh player instance")
+        }
     }
 
     private val playerListener = object : Player.Listener {
@@ -248,13 +311,10 @@ class WatchViewModel(
             if (playbackState == Player.STATE_READY) {
                 updateState { copy(durationMs = player?.duration ?: durationMs) }
                 startTicker()
+                checkVideoTrackActuallySelected()
             }
-            if (playbackState == Player.STATE_ENDED && SettingsState.autonext) {
-                val next = nextPlayableEpisode(state.value.episode + 1)
-                if (next != null) {
-                    AppLogger.i(LogCategory.PLAYER, "Autonext -> episode $next")
-                    switchEpisode(next)
-                }
+            if (playbackState == Player.STATE_ENDED) {
+                onEpisodeEnded()
             }
         }
 
@@ -274,14 +334,12 @@ class WatchViewModel(
         }
 
         override fun onCues(cueGroup: CueGroup) {
-            // Custom caption rendering (site-style overlay with user styles).
             if (_state.value.cues !== cueGroup.cues) {
                 updateState { copy(cues = cueGroup.cues) }
             }
         }
 
         override fun onCues(cues: MutableList<Cue>) {
-            // Older overload (kept for binary compatibility).
             if (_state.value.cues != cues) updateState { copy(cues = cues) }
         }
 
@@ -300,25 +358,98 @@ class WatchViewModel(
                     "  cause: ${error.cause?.javaClass?.simpleName ?: "-"}: ${error.cause?.message?.take(160) ?: "-"}",
                 error,
             )
+            cancelNextUp()
             maybeAutoFallback(error, gen, friendly)
         }
+    }
+
+    /**
+     * "Audio plays but the screen stays black" guard: after READY, if the
+     * stream selects NO video track (a broken/video-less rendition, an
+     * unsupported codec silently dropped, an audio-only manifest), that's a
+     * source problem — burn the provider and fall back to the next one
+     * automatically instead of leaving the user on a black player.
+     */
+    private fun checkVideoTrackActuallySelected() {
+        if (checkedVideoTrackForItem) return
+        checkedVideoTrackForItem = true
+        val p = player ?: return
+        if (_state.value.embedActive != null || _state.value.localFile != null) return
+        val hasSelectedVideo = p.currentTracks.groups.any { g ->
+            g.type == C.TRACK_TYPE_VIDEO && (0 until g.length).any { g.isTrackSelected(it) }
+        }
+        if (!hasSelectedVideo) {
+            val gen = episodeGen.get()
+            AppLogger.w(
+                LogCategory.PLAYER,
+                "No video track selected after READY on ${_state.value.streamServer} " +
+                    "(audio-only or unsupported codec) — auto-falling back to the next server",
+            )
+            val friendly = "This server's stream has no playable video track (audio-only or an " +
+                "unsupported codec). Switching servers…"
+            burnProviderAndFallback("no-video-track", gen, friendly)
+        } else {
+            val video = p.currentTracks.groups
+                .filter { it.type == C.TRACK_TYPE_VIDEO }
+                .flatMap { g -> (0 until g.length).map { i -> g.getTrackFormat(i) to g.isTrackSelected(i) } }
+                .filter { it.second }
+                .map { it.first }
+                .firstOrNull()
+            AppLogger.i(
+                LogCategory.PLAYER,
+                "Video track live: ${video?.width}x${video?.height} ${video?.sampleMimeType ?: "?"}" +
+                    " — surface ${if (textureView != null) "attached" else "PENDING"}",
+            )
+        }
+    }
+
+    /** Episode ended — autonext (with configurable countdown) or just idle. */
+    private fun onEpisodeEnded() {
+        if (!SettingsState.autonext) return
+        val next = nextPlayableEpisode(
+            _state.value.episode + 1,
+            forceSkipFiller = SettingsState.autoSkipFiller,
+        ) ?: return
+        val countdown = SettingsState.autonextCountdownSec.coerceIn(0, 30)
+        if (countdown <= 0) {
+            switchEpisode(next)
+        } else {
+            val nextItem = _state.value.episodes.firstOrNull { it.number == next }
+            updateState {
+                copy(
+                    nextUp = NextUpState(
+                        episode = next,
+                        title = nextItem?.title?.takeIf { t -> t.isNotBlank() } ?: "Episode $next",
+                        countdownSec = countdown,
+                    ),
+                )
+            }
+            startTicker()
+        }
+    }
+
+    fun cancelNextUp() {
+        if (_state.value.nextUp != null) updateState { copy(nextUp = null) }
+    }
+
+    fun playNextNow() {
+        val n = _state.value.nextUp?.episode ?: return
+        cancelNextUp()
+        switchEpisode(n)
     }
 
     /**
      * Intelligent provider fallback — bounded, per-episode.
      *
      * Triggered when playback fails with a SOURCE-level error (parsing /
-     * container / manifest / HTTP 4xx-5xx from the stream host) or when a
-     * provider resolves no usable source. Rules:
-     *  - each provider is tried at most once per episode+language
-     *  - network-offline and rate-limit (429) failures do NOT burn providers
-     *  - embed (E-server) mode never falls back to native sources
-     *  - once every capable provider is exhausted, the LAST error is shown
-     *    with the full tried-list so the user knows what happened.
+     * container / manifest / HTTP 4xx-5xx from the stream host), when a
+     * provider resolves no usable source, or when the stream turns out to
+     * have no playable video track.
      */
     /** Returns true when a fallback reload was started (caller should bail). */
     private fun maybeAutoFallback(error: PlaybackException?, gen: Int, friendly: String?): Boolean {
         if (_state.value.embedActive != null) return false
+        if (_state.value.localFile != null) return false
         if (episodeGen.get() != gen) return false // stale error from a previous load
 
         val http = error?.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
@@ -337,8 +468,12 @@ class WatchViewModel(
             updateState { copy(playbackError = friendly ?: friendlyPlaybackError(error!!)) }
             return false
         }
+        return burnProviderAndFallback(_state.value.streamServer, gen, friendly)
+    }
 
-        val current = _state.value.streamServer
+    /** Burn the current provider (once) and auto-switch to the next capable one. */
+    private fun burnProviderAndFallback(current: String, gen: Int, friendly: String?): Boolean {
+        if (episodeGen.get() != gen) return false
         failedProviders += current.lowercase()
         val next = nextCapableProvider()
         if (next != null) {
@@ -346,8 +481,7 @@ class WatchViewModel(
             val tried = failedProviders.joinToString(" → ")
             AppLogger.i(
                 LogCategory.PLAYER,
-                "FALLBACK #${failedProviders.size}: $current failed -> trying $next " +
-                    "(tried: $tried)",
+                "FALLBACK #${failedProviders.size}: $current failed -> trying $next (tried: $tried)",
             )
             updateState { copy(playbackError = null, streamError = null, streamUrl = null) }
             _state.value = _state.value.copy(streamServer = next)
@@ -357,7 +491,7 @@ class WatchViewModel(
             autoFallingBack = false
             val tried = failedProviders.joinToString(", ")
             val verdict = "All servers failed for this episode ($tried). " +
-                (friendly ?: "Try switching language, the Fix-it button, or an E-server.")
+                (friendly ?: "Try switching language or reloading the stream.")
             AppLogger.w(LogCategory.PLAYER, "FALLBACK exhausted (ep ${_state.value.episode}): $verdict")
             updateState { copy(playbackError = verdict) }
         }
@@ -383,15 +517,28 @@ class WatchViewModel(
     //  Player surface registration (called by the UI)
     // -----------------------------------------------------------------------
 
-    /** Attach the Compose-rendered TextureView (enables screenshots). */
+    /**
+     * Attach the Compose-rendered TextureView. The player may not exist yet
+     * (first load: the surface composes while sources are still resolving) —
+     * in that case [player()] attaches the stored view when it builds the
+     * player, so both orders are covered.
+     */
     fun attachSurface(view: TextureView) {
         textureView = view
         player?.setVideoTextureView(view)
     }
 
-    fun detachSurface() {
-        textureView = null
-        player?.clearVideoSurface()
+    /**
+     * Identity-guarded detach: only clears the player's surface when the
+     * view being released is STILL the registered one. This is what makes
+     * the inline <-> fullscreen swap safe — if Compose releases the OLD
+     * view after the NEW view already attached, the new attachment survives.
+     */
+    fun detachSurface(view: TextureView) {
+        if (textureView === view) {
+            textureView = null
+            player?.clearVideoSurface()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -401,9 +548,13 @@ class WatchViewModel(
     fun togglePlayPause() {
         val p = player() ?: return
         if (p.isPlaying) p.pause() else p.play()
+        cancelNextUp()
     }
 
-    fun play() = player()?.play()
+    fun play() {
+        cancelNextUp()
+        player()?.play()
+    }
 
     fun pause() = player()?.pause()
 
@@ -412,6 +563,11 @@ class WatchViewModel(
         val bounded = positionMs.coerceIn(0L, if (p.duration > 0) p.duration else Long.MAX_VALUE)
         p.seekTo(bounded)
         updateState { copy(positionMs = bounded) }
+    }
+
+    /** Seek by the CONFIGURABLE amount (Settings -> Player -> Seek amount). */
+    fun seekByConfigured(deltaSign: Int) {
+        seekBy(deltaSign.toLong() * SettingsState.seekAmountSec * 1000L)
     }
 
     fun seekBy(deltaMs: Long) {
@@ -428,14 +584,14 @@ class WatchViewModel(
 
     // ── hold-to-speed (press & hold the video surface) ─────────────────────
 
-    /** Temporarily jump to [speed] (default 2x) while the surface is held. */
-    fun beginHoldSpeed(speed: Float = 2.0f) {
+    /** Temporarily jump to the configured hold speed while the surface is held. */
+    fun beginHoldSpeed() {
         val p = player() ?: return
         if (holdOriginalSpeed == null) {
             holdOriginalSpeed = p.playbackParameters.speed.takeIf { it > 0f } ?: 1f
         }
-        p.setPlaybackSpeed(speed)
-        updateState { copy(speed = speed) }
+        p.setPlaybackSpeed(SettingsState.holdSpeedRate)
+        updateState { copy(speed = SettingsState.holdSpeedRate) }
     }
 
     /** Restore the speed from before the hold (never persists the hold rate). */
@@ -518,25 +674,49 @@ class WatchViewModel(
         refreshTrackMenus(p.currentTracks)
     }
 
-    /** Cycle captions Off <-> last/default track (site: CC button + `c` key). */
+    /** Cycle captions Off <-> preferred/default track (site: CC button). */
     fun toggleCaptions() {
         val current = _state.value.textTracks.firstOrNull { it.isSelected }
         if (current != null) {
             selectTextTrack(null)
         } else {
-            val preferred = _state.value.textTracks.firstOrNull { it.label.contains("english", ignoreCase = true) }
-                ?: _state.value.textTracks.firstOrNull()
+            val preferred = preferredSubtitleTrack()
             selectTextTrack(preferred)
         }
     }
 
-    /** Skip past the opening/ending (site's Skip buttons + autoskip). */
+    /** User's default subtitle language (Settings), else English, else first. */
+    fun preferredSubtitleTrack(): TrackOption? {
+        val tracks = _state.value.textTracks
+        if (tracks.isEmpty()) return null
+        val preferredLabel = SettingsState.defaultSubtitleLang
+        return tracks.firstOrNull { it.label.contains(preferredLabel, ignoreCase = true) }
+            ?: tracks.firstOrNull { it.label.contains("english", ignoreCase = true) }
+            ?: tracks.firstOrNull()
+    }
+
+    /**
+     * Skip past the opening/ending. Uses the episode's REAL skip timestamps
+     * from the sources API when available; only falls back to the
+     * configurable intro-skip duration when the episode has no metadata
+     * (never a random fixed jump).
+     */
     fun skipIntro() {
-        if (_state.value.hasIntro) seekTo(_state.value.introEndMs)
+        val s = _state.value
+        if (s.hasIntro) {
+            seekTo(s.introEndMs)
+        } else if (SettingsState.introSkipDuration > 0) {
+            seekTo((SettingsState.introSkipDuration * 1000L).coerceAtMost(s.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE))
+        }
     }
 
     fun skipOutro() {
-        if (_state.value.hasOutro) seekTo(_state.value.outroEndMs)
+        val s = _state.value
+        if (s.hasOutro) {
+            seekTo(s.outroEndMs)
+        } else if (s.durationMs > 0) {
+            seekTo(s.durationMs)
+        }
     }
 
     fun nextEpisode() {
@@ -549,19 +729,34 @@ class WatchViewModel(
         if (prev >= 1) switchEpisode(prev)
     }
 
-    /** [skipFillers] setting: autonext/next skips filler episodes. */
-    private fun nextPlayableEpisode(from: Int): Int? {
+    /**
+     * [skipFillers] setting: autonext/next skips filler episodes.
+     * [forceSkipFiller] (auto paths + autoSkipFiller setting) skips fillers
+     * even when the regular skip-fillers toggle is off.
+     */
+    private fun nextPlayableEpisode(from: Int, forceSkipFiller: Boolean = false): Int? {
         val eps = _state.value.episodes
         val total = _state.value.totalEpisodes
         if (from > total) return null
         if (eps.isEmpty()) return from
+        val skip = SettingsState.skipFillers || forceSkipFiller
         var n = from
         while (n <= total) {
             val item = eps.firstOrNull { it.number == n }
-            if (item == null || !item.isFiller || !SettingsState.skipFillers) return n
+            if (item == null || !item.isFiller || !skip) return n
             n++
         }
         return null
+    }
+
+    /** Jump straight past a filler episode the user just landed on. */
+    fun skipCurrentFiller() {
+        val current = _state.value.episode
+        val next = nextPlayableEpisode(current + 1) ?: return
+        if (next > current) {
+            updateState { copy(skippedFillerNotice = null) }
+            switchEpisode(next)
+        }
     }
 
     /**
@@ -637,8 +832,6 @@ class WatchViewModel(
                             repo.anikageEpisodes(slug).onSuccess { eps ->
                                 if (eps.isNotEmpty()) {
                                     val distinct = eps.distinctBy { it.number }
-                                    // The episode LIST is the authority for what is
-                                    // watchable (metadata counts can lag/ahead).
                                     _state.value = _state.value.copy(
                                         episodes = distinct.map {
                                             EpisodeItem(
@@ -656,20 +849,72 @@ class WatchViewModel(
                                         "Loaded '${details.displayTitle()}' — ${distinct.size} episodes listed " +
                                             "(metadata says ${details.episodes ?: "?"})",
                                     )
+                                    // Auto-skip filler on arrival: when the
+                                    // session auto-resumed INTO a filler and
+                                    // the setting is on, jump to the next
+                                    // canon episode (explicit picks are kept).
+                                    if (SettingsState.autoSkipFiller && initialEpisode <= 0 &&
+                                        _state.value.episode == ep
+                                    ) {
+                                        val landed = distinct.firstOrNull { it.number == ep }
+                                        if (landed?.isFiller == true) {
+                                            val next = distinct
+                                                .firstOrNull { it.number > ep && !it.isFiller }
+                                                ?.number
+                                            if (next != null && next <= distinct.size) {
+                                                AppLogger.i(
+                                                    LogCategory.PLAYER,
+                                                    "Auto-skip filler: episode $ep is filler -> jumping to $next",
+                                                )
+                                                updateState { copy(skippedFillerNotice = "Skipped filler episode $ep") }
+                                                switchEpisode(next)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    loadEpisode(ep)
+                    // Per-episode watch progress for the episode list UI.
+                    launch { loadEpisodeProgress() }
+                    // Local anime list status.
+                    launch {
+                        val status = repo.getListStatus(animeId)
+                        if (_state.value.listStatus != status) {
+                            _state.value = _state.value.copy(listStatus = status)
+                        }
+                    }
+                    if (initialLocalFile != null && File(initialLocalFile).exists()) {
+                        playLocalFile(initialLocalFile, ep)
+                    } else {
+                        loadEpisode(ep)
+                    }
                 },
                 onFailure = { e ->
-                    AppLogger.e(LogCategory.PLAYER, "Failed to load anime (id=$animeId)", e)
-                    _state.value = _state.value.copy(
-                        loading = false,
-                        error = (e as? com.anikage.app.core.data.api.ApiHttpException)?.userMessage()
-                            ?: e.message ?: "Failed to load anime.",
-                    )
+                    // Offline + Room cache may still serve a downloaded copy.
+                    if (initialLocalFile != null && File(initialLocalFile).exists()) {
+                        _state.value = _state.value.copy(loading = false)
+                        playLocalFile(initialLocalFile, _state.value.episode)
+                    } else {
+                        AppLogger.e(LogCategory.PLAYER, "Failed to load anime (id=$animeId)", e)
+                        _state.value = _state.value.copy(
+                            loading = false,
+                            error = (e as? com.anikage.app.core.data.api.ApiHttpException)?.userMessage()
+                                ?: e.message ?: "Failed to load anime.",
+                        )
+                    }
                 },
+            )
+        }
+    }
+
+    /** Per-episode progress for the whole anime (episode list UI). */
+    private suspend fun loadEpisodeProgress() {
+        if (SettingsState.incognito || !SettingsState.rememberPosition) return
+        runCatching {
+            val all = repo.loadProgressForAnime(animeId)
+            _state.value = _state.value.copy(
+                episodeProgress = all.associate { it.episode to EpisodeProgress(it.positionMs, it.durationMs) },
             )
         }
     }
@@ -679,7 +924,7 @@ class WatchViewModel(
      * episode (>= 95%) continues into the NEXT one — the site's behaviour.
      */
     private suspend fun resumeEpisode(): Int {
-        if (SettingsState.incognito) return 1
+        if (SettingsState.incognito || !SettingsState.rememberPosition) return 1
         return runCatching {
             val all = repo.loadProgressForAnime(animeId)
             val latest = all.maxByOrNull { it.episode } ?: return 1
@@ -695,6 +940,8 @@ class WatchViewModel(
     private fun loadEpisode(episode: Int, refresh: Boolean = false) {
         val gen = episodeGen.incrementAndGet()
         episodeJob?.cancel()
+        checkedVideoTrackForItem = false
+        cancelNextUp()
         episodeJob = viewModelScope.launch {
             if (!isActive) return@launch
             _state.value = _state.value.copy(
@@ -703,6 +950,7 @@ class WatchViewModel(
                 playbackError = null,
                 viewCounted = false,
                 cues = emptyList(),
+                localFile = null,
             )
             viewSent.set(false)
             if (!autoFallingBack) failedProviders.clear()
@@ -809,7 +1057,9 @@ class WatchViewModel(
 
             if (episodeGen.get() != gen) return@launch // user moved on — drop stale result
 
-            val saved = if (!SettingsState.incognito) repo.loadProgress(animeId, episode)?.positionMs ?: 0L else 0L
+            val saved = if (!SettingsState.incognito && SettingsState.rememberPosition) {
+                repo.loadProgress(animeId, episode)?.positionMs ?: 0L
+            } else 0L
 
             _state.value = _state.value.copy(
                 streamUrl = if (activeEmbed != null) null else streamUrl,
@@ -844,6 +1094,7 @@ class WatchViewModel(
                 }
             }
             loadComments(episode)
+            refreshDownloadedForEpisode(episode)
 
             if (!SettingsState.incognito) {
                 repo.markRecentlyViewed(
@@ -915,17 +1166,26 @@ class WatchViewModel(
         if (episodeGen.get() != gen) return // stale — a newer load owns the player
         val player = player()
 
+        // Belt & suspenders: the surface MUST be attached for this item —
+        // covers every attach/player ordering (the black-video fix).
+        textureView?.let { view ->
+            player.setVideoTextureView(view)
+        }
+
         val mime = when {
+            url.startsWith("file:") || url.startsWith("/") -> localFileMime(url)
             url.contains(".mpd") -> MimeTypes.APPLICATION_MPD
             url.contains(".m3u8") || url.contains("/m3u8/") -> MimeTypes.APPLICATION_M3U8
             url.contains(".mp4") -> MimeTypes.VIDEO_MP4
             url.contains(".webm") -> MimeTypes.VIDEO_WEBM
             url.contains(".mkv") -> MimeTypes.VIDEO_MATROSKA
+            url.endsWith(".ts") -> MimeTypes.VIDEO_MP2T
             else -> MimeTypes.APPLICATION_M3U8 // Anikage tokens are HLS by default
         }
         AppLogger.d(
             LogCategory.PLAYER,
-            "Preparing ExoPlayer: mime=$mime pos=${_state.value.savedPositionMs}ms",
+            "Preparing ExoPlayer: mime=$mime pos=${_state.value.savedPositionMs}ms " +
+                "surface=${if (textureView != null) "attached" else "pending-attach"}",
         )
 
         val builder = MediaItem.Builder()
@@ -974,8 +1234,18 @@ class WatchViewModel(
         applyVolumeTo(player)
         updateState { copy(speed = SettingsState.playbackRate, positionMs = savedPositionMs) }
         player.prepare()
+        checkedVideoTrackForItem = false
         refreshTrackMenus(player.currentTracks)
         if (SettingsState.autoplay) player.play()
+    }
+
+    private fun localFileMime(path: String): String = when {
+        path.endsWith(".ts") -> MimeTypes.VIDEO_MP2T
+        path.endsWith(".mp4") || path.endsWith(".m4v") -> MimeTypes.VIDEO_MP4
+        path.endsWith(".webm") -> MimeTypes.VIDEO_WEBM
+        path.endsWith(".mkv") -> MimeTypes.VIDEO_MATROSKA
+        path.endsWith(".mp3") -> MimeTypes.AUDIO_MPEG
+        else -> MimeTypes.VIDEO_MP2T
     }
 
     /** Build the Quality / Audio / Subtitles menus from the current tracks. */
@@ -1047,7 +1317,7 @@ class WatchViewModel(
     }
 
     // -----------------------------------------------------------------------
-    //  Position ticker — progress, autoskip, view counting
+    //  Position ticker — progress, autoskip, view counting, next-up countdown
     // -----------------------------------------------------------------------
 
     private fun startTicker() {
@@ -1056,7 +1326,7 @@ class WatchViewModel(
             var lastSave = 0L
             while (isActive) {
                 val p = player ?: break
-                if (p.isPlaying) {
+                if (p.isPlaying || _state.value.nextUp != null) {
                     val pos = p.currentPosition
                     val dur = if (p.duration > 0) p.duration else 0L
                     updateState {
@@ -1066,8 +1336,18 @@ class WatchViewModel(
                             durationMs = if (dur > 0) dur else durationMs,
                         )
                     }
-                    // Autoskip intro/outro (site: autoskip setting).
-                    if (SettingsState.autoskip) {
+                    // Live episode-list progress for the current episode.
+                    if (dur > 0 && pos > 0) {
+                        updateState {
+                            copy(
+                                episodeProgress = episodeProgress +
+                                    (episode to EpisodeProgress(pos, dur)),
+                            )
+                        }
+                    }
+                    // Autoskip intro/outro (site: autoskip setting) — REAL
+                    // timestamps from the sources response only.
+                    if (SettingsState.autoskip && p.isPlaying) {
                         val s = _state.value
                         if (s.hasIntro && pos >= s.introStartMs && pos < s.introEndMs) {
                             AppLogger.d(LogCategory.PLAYER, "Autoskip intro -> ${s.introEndMs / 1000}s")
@@ -1078,7 +1358,9 @@ class WatchViewModel(
                         }
                     }
                     // Periodic progress save (site: watch progress auto-sync).
-                    if (!SettingsState.incognito && dur > 0 && pos - lastSave > 5_000L) {
+                    if (!SettingsState.incognito && SettingsState.rememberPosition &&
+                        dur > 0 && pos - lastSave > 5_000L
+                    ) {
                         lastSave = pos
                         repo.saveProgress(animeId, _state.value.episode, pos, dur)
                     }
@@ -1095,6 +1377,17 @@ class WatchViewModel(
                         } else {
                             updateState { copy(viewCounted = true) }
                         }
+                    }
+                    // Auto-next countdown.
+                    val n = _state.value.nextUp
+                    if (n != null) {
+                        if (n.countdownSec <= 1) {
+                            playNextNow()
+                        } else {
+                            updateState { copy(nextUp = n.copy(countdownSec = n.countdownSec - 1)) }
+                        }
+                        delay(1000)
+                        continue
                     }
                 }
                 delay(250)
@@ -1129,6 +1422,8 @@ class WatchViewModel(
             bufferedMs = 0L,
             embedUrl = null,
             embedError = null,
+            localFile = null,
+            nextUp = null,
         )
         viewSent.set(false)
         loadEpisode(ep)
@@ -1146,6 +1441,7 @@ class WatchViewModel(
             playbackError = null,
             embedUrl = null,
             embedError = null,
+            localFile = null,
         )
         loadEpisode(_state.value.episode)
     }
@@ -1161,6 +1457,7 @@ class WatchViewModel(
             playbackError = null,
             embedUrl = null,
             embedError = null,
+            localFile = null,
         )
         loadEpisode(_state.value.episode)
     }
@@ -1177,6 +1474,7 @@ class WatchViewModel(
                 embedLoading = false,
                 streamUrl = null,
                 playbackError = null,
+                localFile = null,
             )
             loadEpisode(_state.value.episode)
             return
@@ -1193,13 +1491,14 @@ class WatchViewModel(
             streamUrl = null,
             streamError = null,
             playbackError = null,
+            localFile = null,
         )
         loadEpisode(_state.value.episode)
     }
 
     /**
      * Re-resolve the stream for the current episode — the site's refresh
-     * button AND the report dialog's "Fix it" action (`refresh=1`).
+     * button (fresh token).
      */
     fun reloadStream(refresh: Boolean = false) {
         episodeJob?.cancel()
@@ -1211,6 +1510,7 @@ class WatchViewModel(
             embedUrl = null,
             embedError = null,
             cues = emptyList(),
+            localFile = null,
         )
         loadEpisode(_state.value.episode, refresh = refresh)
     }
@@ -1249,32 +1549,190 @@ class WatchViewModel(
     }
 
     // -----------------------------------------------------------------------
-    //  Watch-page actions (download / report)
+    //  In-app downloads (EpisodeDownloadEngine bridge)
     // -----------------------------------------------------------------------
 
-    /** Download links for the current episode (the site's Download dialog). */
-    suspend fun downloadLinks(): Result<com.anikage.app.core.data.api.AnikageDownloadsResponse> {
-        val slug = _state.value.slug
-            ?: return Result.failure(IllegalStateException("No Anikage slug for this anime."))
-        return repo.anikageDownloads(slug, _state.value.episode)
+    /** Resolve the downloadable renditions for the current episode (dialog). */
+    fun resolveDownloadQualities() {
+        val slug = _state.value.slug ?: run {
+            updateState { copy(downloadQualitiesError = "No Anikage slug for this anime.") }
+            return
+        }
+        updateState { copy(downloadQualitiesLoading = true, downloadQualitiesError = null, downloadQualities = emptyList()) }
+        viewModelScope.launch {
+            val result = EpisodeDownloadEngine.resolveVariantList(
+                app, slug, _state.value.episode, _state.value.streamServer.lowercase(), _state.value.streamLang,
+            )
+            if (result.isSuccess) {
+                val list = result.getOrDefault(emptyList())
+                val options = list.map { DownloadQualityOption(it.label, it.height) }
+                val capped = when (SettingsState.streamQuality) {
+                    "low" -> options.filter { it.height <= 480 || it.height == 0 }
+                    "standard" -> options.filter { it.height <= 720 || it.height == 0 }
+                    "full" -> options.filter { it.height <= 1080 || it.height == 0 }
+                    else -> options
+                }
+                updateState {
+                    copy(
+                        downloadQualities = (capped.ifEmpty { options }).ifEmpty { listOf(DownloadQualityOption("Auto", 0)) },
+                        downloadQualitiesLoading = false,
+                    )
+                }
+            } else {
+                updateState {
+                    copy(
+                        downloadQualitiesLoading = false,
+                        downloadQualitiesError = result.exceptionOrNull()?.message ?: "Couldn't resolve download qualities.",
+                    )
+                }
+            }
+        }
     }
 
-    /** Submit an episode report (the site's Report dialog). */
-    fun submitReport(type: String, note: String, onDone: (Boolean) -> Unit) {
-        val slug = _state.value.slug
-        if (slug == null) {
-            onDone(false)
+    /** Start an in-app download of the current episode at [height] (0 = auto). */
+    fun startDownload(height: Int) {
+        val slug = _state.value.slug ?: return
+        val d = _state.value.details
+        EpisodeDownloadEngine.enqueue(
+            app,
+            EpisodeDownloadEngine.DownloadRequest(
+                animeId = animeId,
+                slug = slug,
+                episode = _state.value.episode,
+                provider = _state.value.streamServer,
+                lang = _state.value.streamLang,
+                height = height,
+                titleRomaji = d?.title?.romaji,
+                titleEnglish = d?.title?.english,
+                episodeTitle = _state.value.currentEpisodeItem?.title,
+                posterUrl = d?.coverImage?.best(),
+            ),
+        )
+    }
+
+    /** Load the completed download row for an episode into state. */
+    fun refreshDownloadedForEpisode(episode: Int) {
+        viewModelScope.launch {
+            runCatching {
+                val row = repo.downloadedEpisode(animeId, episode)
+                if (_state.value.episode == episode) {
+                    _state.value = _state.value.copy(downloaded = row)
+                }
+            }
+        }
+    }
+
+    /** Switch the player to the downloaded copy of the current episode. */
+    fun playDownloadedCopy() {
+        val row = _state.value.downloaded ?: return
+        if (!File(row.filePath).exists()) {
+            updateState { copy(downloaded = null) }
+            refreshDownloadedForEpisode(row.episode)
             return
         }
         viewModelScope.launch {
-            val result = repo.anikageReport(
-                slug = slug,
-                type = type,
-                provider = _state.value.embedActive?.key ?: _state.value.streamServer.lowercase(),
-                episode = _state.value.episode,
-                note = note.takeIf { it.isNotBlank() },
+            saveProgressNow()
+            pause()
+            episodeJob?.cancel()
+            val gen = episodeGen.incrementAndGet()
+            _state.value = _state.value.copy(
+                episode = row.episode,
+                localFile = row.filePath,
+                streamUrl = File(row.filePath).toURI().toString(),
+                streamError = null,
+                playbackError = null,
+                nextUp = null,
+                savedPositionMs = 0L,
             )
-            onDone(result.isSuccess)
+            prepareDownloadedPlayer(gen, row)
+        }
+    }
+
+    /** Leave offline mode — go back to the live stream for this episode. */
+    fun playStreamVersion() {
+        _state.value = _state.value.copy(localFile = null)
+        loadEpisode(_state.value.episode)
+    }
+
+    /** Initial route entry: play a downloaded file for this anime/episode. */
+    private fun playLocalFile(path: String, episode: Int) {
+        viewModelScope.launch {
+            runCatching {
+                val row = repo.downloadedEpisode(animeId, episode)
+                val gen = episodeGen.incrementAndGet()
+                checkedVideoTrackForItem = true
+                val file = File(path)
+                _state.value = _state.value.copy(
+                    loading = false,
+                    episode = episode,
+                    localFile = path,
+                    streamUrl = file.toURI().toString(),
+                    streamError = null,
+                    streamLoading = false,
+                    downloaded = row,
+                )
+                prepareDownloadedPlayer(gen, row, path)
+                loadComments(episode)
+                loadEpisodeProgress()
+            }
+        }
+    }
+
+    /** Prepare the player for a downloaded (local) file + its sidecar VTT. */
+    private suspend fun prepareDownloadedPlayer(gen: Int, row: DownloadedEpisodeEntity?, explicitPath: String? = null) {
+        val path = explicitPath ?: row?.filePath ?: return
+        val player = player()
+        textureView?.let { player.setVideoTextureView(it) }
+        val file = File(path)
+        val builder = MediaItem.Builder()
+            .setUri(file.toURI().toString())
+            .setMimeType(localFileMime(path))
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle("${_state.value.title} — Episode ${_state.value.episode}")
+                    .build(),
+            )
+        val vtt = row?.subtitlePath?.let { File(it) }?.takeIf { it.exists() }
+        if (vtt != null) {
+            builder.setSubtitleConfigurations(
+                listOf(
+                    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.fromFile(vtt))
+                        .setMimeType(MimeTypes.TEXT_VTT)
+                        .setLabel("English")
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build(),
+                ),
+            )
+        }
+        val saved = if (!SettingsState.incognito && SettingsState.rememberPosition) {
+            repo.loadProgress(animeId, _state.value.episode)?.positionMs ?: 0L
+        } else 0L
+        player.setMediaItem(builder.build(), saved)
+        player.setPlaybackSpeed(SettingsState.playbackRate)
+        applyVolumeTo(player)
+        updateState { copy(speed = SettingsState.playbackRate) }
+        player.prepare()
+        if (SettingsState.autoplay) player.play()
+        AppLogger.i(LogCategory.PLAYER, "Playing downloaded copy: ${file.name} (${file.length() / 1_000_000}MB)")
+    }
+
+    // -----------------------------------------------------------------------
+    //  Local anime list
+    // -----------------------------------------------------------------------
+
+    /** Set / clear this anime's local list status (null removes it). */
+    fun setListStatus(status: String?) {
+        if (SettingsState.incognito) return
+        val d = _state.value.details
+        viewModelScope.launch {
+            repo.setListStatus(
+                animeId, status,
+                titleRomaji = d?.title?.romaji,
+                titleEnglish = d?.title?.english,
+                posterUrl = d?.coverImage?.best(),
+                coverColor = d?.coverImage?.color,
+            )
+            updateState { copy(listStatus = status) }
         }
     }
 
@@ -1291,7 +1749,7 @@ class WatchViewModel(
 
     fun saveProgressNow() {
         val p = player ?: return
-        if (SettingsState.incognito) return
+        if (SettingsState.incognito || !SettingsState.rememberPosition) return
         val position = p.currentPosition
         val duration = p.duration.coerceAtLeast(0L)
         if (duration > 0 && position > 0) {
@@ -1310,7 +1768,7 @@ class WatchViewModel(
         // ticker already cover the normal paths; viewModelScope is cancelled
         // before onCleared, so a GlobalScope write is the only reliable way).
         val p = player
-        if (p != null && !SettingsState.incognito) {
+        if (p != null && !SettingsState.incognito && SettingsState.rememberPosition) {
             val pos = p.currentPosition
             val dur = p.duration.coerceAtLeast(0L)
             if (dur > 0 && pos > 0) {
@@ -1336,8 +1794,9 @@ class WatchViewModel(
             animeId: Int,
             episode: Int,
             slug: String? = null,
+            localFile: String? = null,
         ) = viewModelFactory {
-            initializer { WatchViewModel(app, repo, animeId, episode, slug) }
+            initializer { WatchViewModel(app, repo, animeId, episode, slug, localFile) }
         }
     }
 }
@@ -1349,7 +1808,7 @@ fun friendlyPlaybackError(error: PlaybackException): String {
     val http = (cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)
     return when {
         http != null && http.responseCode == 403 ->
-            "The stream host blocked this request (403). Switching servers or using the Fix-it button usually clears it."
+            "The stream host blocked this request (403). Switching servers or reloading usually clears it."
         http != null && http.responseCode == 429 ->
             "The stream host is rate limiting (429). Wait a few seconds, then retry."
         http != null && http.responseCode in 500..599 ->

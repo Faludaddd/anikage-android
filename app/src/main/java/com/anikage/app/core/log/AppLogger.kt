@@ -27,6 +27,7 @@ enum class LogCategory(val label: String) {
     DATA("Data"),
     NETWORK("Network"),
     PLAYER("Player"),
+    DOWNLOAD("Download"),
     SYSTEM("System"),
 }
 

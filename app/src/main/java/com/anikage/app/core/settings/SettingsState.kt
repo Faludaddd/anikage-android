@@ -37,6 +37,8 @@ data class CaptionStyles(
     val textShadow: Boolean = true,
     /** Text border/outline on/off (site: textBorder). */
     val textBorder: Boolean = false,
+    /** Vertical position: fraction of player height above the bottom, 0..0.45. */
+    val position: Float = 0.08f,
 )
 
 /**
@@ -96,7 +98,8 @@ object SettingsState {
     /** Preferred stream quality (site: streamQuality: auto|low|standard|full). */
     var streamQuality by mutableStateOf("auto")
 
-    /** Intro skip duration in seconds (site: introSkipDuration). */
+    /** Intro skip duration in seconds (site: introSkipDuration) — fallback
+     *  when an episode has no intro metadata from the sources API. */
     var introSkipDuration by mutableIntStateOf(85)
 
     /** Default volume 0..1 (site: volume). */
@@ -116,6 +119,46 @@ object SettingsState {
 
     /** Player caption styling (site: captionStyles). */
     var captionStyles by mutableStateOf(CaptionStyles())
+
+    // ── Advanced player settings (app extensions; all wired to real
+    //    behaviour — every knob below is read by the player engine) ────────
+
+    /** Seek amount for the ± buttons, double-tap zones and key handlers (5..60s). */
+    var seekAmountSec by mutableIntStateOf(10)
+
+    /** Press-and-hold on the video surface temporarily speeds playback up. */
+    var holdToSpeedEnabled by mutableStateOf(true)
+
+    /** Speed used while the surface is held (1.5x..3x). */
+    var holdSpeedRate by mutableFloatStateOf(2.0f)
+
+    /** Master gate for touch gestures (double-tap seek + hold speed). */
+    var gestureControls by mutableStateOf(true)
+
+    /** Double-tap left/right edges seeks ±[seekAmountSec]. */
+    var doubleTapSeek by mutableStateOf(true)
+
+    /** Auto-next countdown seconds before the next episode starts (0 = instant). */
+    var autonextCountdownSec by mutableIntStateOf(8)
+
+    /** Remember playback position and auto-resume episodes. */
+    var rememberPosition by mutableStateOf(true)
+
+    /** Default subtitle language label preference (matched case-insensitively). */
+    var defaultSubtitleLang by mutableStateOf("English")
+
+    /** Fullscreen orientation: landscape (locked sensor-landscape) | sensor | none. */
+    var fullscreenOrientation by mutableStateOf("landscape")
+
+    /** Auto-skip filler episodes when the auto-next chain would enter them. */
+    var autoSkipFiller by mutableStateOf(false)
+
+    // ── Downloads ─────────────────────────────────────────────────────────
+    /** Preferred download rendition height; 0 = follow stream quality. */
+    var downloadQualityHeight by mutableIntStateOf(0)
+
+    /** Only download over unmetered (Wi-Fi) connections. */
+    var downloadsWifiOnly by mutableStateOf(false)
 
     // ── lifecycle ─────────────────────────────────────────────────────────
 
@@ -144,6 +187,18 @@ object SettingsState {
         captionStyles = p.getString("captionStyles", null)
             ?.let { runCatching { json.decodeFromString<CaptionStyles>(it) }.getOrNull() }
             ?: CaptionStyles()
+        seekAmountSec = p.getInt("seekAmountSec", 10)
+        holdToSpeedEnabled = p.getBoolean("holdToSpeedEnabled", true)
+        holdSpeedRate = p.getFloat("holdSpeedRate", 2.0f)
+        gestureControls = p.getBoolean("gestureControls", true)
+        doubleTapSeek = p.getBoolean("doubleTapSeek", true)
+        autonextCountdownSec = p.getInt("autonextCountdownSec", 8)
+        rememberPosition = p.getBoolean("rememberPosition", true)
+        defaultSubtitleLang = p.getString("defaultSubtitleLang", "English") ?: "English"
+        fullscreenOrientation = p.getString("fullscreenOrientation", "landscape") ?: "landscape"
+        autoSkipFiller = p.getBoolean("autoSkipFiller", false)
+        downloadQualityHeight = p.getInt("downloadQualityHeight", 0)
+        downloadsWifiOnly = p.getBoolean("downloadsWifiOnly", false)
     }
 
     private fun save(context: Context, block: android.content.SharedPreferences.Editor.() -> Unit) {
@@ -180,4 +235,16 @@ object SettingsState {
         save(context) { putBoolean("verboseLogging", v) }
         com.anikage.app.core.log.AppLogger.setVerbose(v, context)
     }
+    fun setSeekAmountSec(context: Context, v: Int) { seekAmountSec = v; save(context) { putInt("seekAmountSec", v) } }
+    fun setHoldToSpeedEnabled(context: Context, v: Boolean) { holdToSpeedEnabled = v; save(context) { putBoolean("holdToSpeedEnabled", v) } }
+    fun setHoldSpeedRate(context: Context, v: Float) { holdSpeedRate = v; save(context) { putFloat("holdSpeedRate", v) } }
+    fun setGestureControls(context: Context, v: Boolean) { gestureControls = v; save(context) { putBoolean("gestureControls", v) } }
+    fun setDoubleTapSeek(context: Context, v: Boolean) { doubleTapSeek = v; save(context) { putBoolean("doubleTapSeek", v) } }
+    fun setAutonextCountdownSec(context: Context, v: Int) { autonextCountdownSec = v; save(context) { putInt("autonextCountdownSec", v) } }
+    fun setRememberPosition(context: Context, v: Boolean) { rememberPosition = v; save(context) { putBoolean("rememberPosition", v) } }
+    fun setDefaultSubtitleLang(context: Context, v: String) { defaultSubtitleLang = v; save(context) { putString("defaultSubtitleLang", v) } }
+    fun setFullscreenOrientation(context: Context, v: String) { fullscreenOrientation = v; save(context) { putString("fullscreenOrientation", v) } }
+    fun setAutoSkipFiller(context: Context, v: Boolean) { autoSkipFiller = v; save(context) { putBoolean("autoSkipFiller", v) } }
+    fun setDownloadQualityHeight(context: Context, v: Int) { downloadQualityHeight = v; save(context) { putInt("downloadQualityHeight", v) } }
+    fun setDownloadsWifiOnly(context: Context, v: Boolean) { downloadsWifiOnly = v; save(context) { putBoolean("downloadsWifiOnly", v) } }
 }
